@@ -1,0 +1,82 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.input {
+  flex: 1;
+  min-width: 200px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9375rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--fg);
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+
+.results {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.results h2 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.resultCard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.resultMeta {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.8125rem;
+  color: var(--fg-muted);
+}
+
+.noMatches,
+.empty,
+.error {
+  margin: 0;
+  font-size: 0.9375rem;
+  color: var(--fg-muted);
+}
+
+.error {
+  color: var(--danger, #dc3545);
+}

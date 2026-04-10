@@ -1,0 +1,26 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.status,
+.error {
+  margin: 0;
+  font-size: 0.9375rem;
+}
+
+.status {
+  color: var(--fg-muted);
+}
+
+.error {
+  color: var(--danger, #dc3545);
+}

@@ -1,0 +1,81 @@
+Create a React web application for managing speech transcription conversations.
+
+Use:
+
+React
+Vite
+TypeScript
+React Query
+Axios
+
+Features:
+
+OAuth login (Google/Yandex via backend)
+
+Pages:
+
+Login page
+
+Conversations list page
+
+Shows:
+date
+duration
+language
+buttons:
+view
+download
+delete
+
+Conversation viewer page
+
+Shows:
+transcript
+speaker labels
+timestamps
+
+Buttons:
+Download transcript
+Generate summary
+
+Search page
+
+Search by:
+text
+semantic search
+
+Settings page
+
+Show:
+
+Server limits:
+max duration
+max TTL
+max file size
+
+User settings:
+default language
+default TTL
+search mode
+
+API integration:
+
+GET /conversations
+GET /conversations/{id}
+POST /search
+DELETE /conversations/{id}
+
+Use modular architecture:
+
+src/
+ api/
+ components/
+ pages/
+ hooks/
+ auth/
+
+Transcript viewer should render speaker segments clearly.
+
+Use clean modern UI.
+
+Use functional React components with hooks.

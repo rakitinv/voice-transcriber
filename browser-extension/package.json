@@ -1,0 +1,22 @@
+{
+  "name": "voice-transcriber-browser-extension",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite"
+  },
+  "dependencies": {
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.273",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react-swc": "^3.8.0",
+    "typescript": "^5.5.0",
+    "vite": "^5.3.0"
+  }
+}
+

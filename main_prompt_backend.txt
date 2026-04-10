@@ -1,0 +1,144 @@
+Create a production-grade backend server for a speech transcription system.
+
+Use:
+
+Python
+FastAPI
+Celery
+Redis
+PostgreSQL
+S3 compatible storage (MinIO)
+
+Architecture must follow modular clean architecture.
+
+Features:
+
+1 OAuth2 authentication
+Google
+Yandex
+
+Issue JWT tokens after login.
+
+2 Audio ingestion
+
+Realtime audio streaming via WebSocket:
+
+/ws/audio
+receive audio chunks
+
+/ws/transcript
+send realtime transcript
+
+Audio format:
+
+WebM + Opus
+
+Chunk size:
+
+500ms – 2s
+
+3 File upload API
+
+POST /upload
+
+Accept audio files.
+
+Max file size configurable.
+
+4 Conversation management
+
+Endpoints:
+
+GET /conversations
+GET /conversations/{id}
+DELETE /conversations/{id}
+
+5 Search API
+
+Support two modes:
+
+Fulltext search (PostgreSQL tsvector)
+Semantic search (embeddings)
+
+6 Storage
+
+Store files in S3.
+
+Structure:
+
+users/{user_id}/conversations/{conversation_id}/
+ audio.webm
+ transcript.json
+ transcript.md
+ summary.md
+
+7 Security
+
+Encrypt stored files using AES256 per user.
+
+Users only access their own conversations.
+
+8 Limits
+
+Server configuration defines:
+
+MAX_DURATION
+MAX_FILE_SIZE
+MAX_TTL
+
+Client cannot exceed limits.
+
+9 Workers
+
+Use Celery workers for:
+
+ASR tasks
+Diarization tasks
+LLM summary tasks
+TTL cleanup tasks
+
+10 Plugin architecture
+
+Implement plugin systems for:
+
+ASR providers
+LLM providers
+Diarization providers
+
+Providers loaded dynamically from config.
+
+11 Logging
+
+Use Python logging.
+
+Log:
+
+API requests
+worker jobs
+auth events
+storage operations
+
+12 Config system
+
+Load configuration from YAML files:
+
+server.yaml
+asr.yaml
+llm.yaml
+limits.yaml
+
+13 Docker support
+
+Provide Dockerfiles and docker-compose.
+
+Services:
+
+api
+worker
+redis
+postgres
+minio
+
+Ensure system runs locally with docker-compose.
+
+Code must be modular and well organized.

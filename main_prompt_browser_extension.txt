@@ -1,0 +1,106 @@
+Create a Chromium browser extension for a speech transcription system.
+
+The extension records audio from browser sources and streams audio to a backend transcription server.
+
+Use:
+
+TypeScript
+Vite
+WebExtension API
+
+Architecture:
+
+src/
+  background/
+  popup/
+  recorder/
+  websocket/
+  settings/
+  auth/
+
+Features:
+
+Audio capture modes:
+
+1 microphone
+2 tab audio
+3 system audio
+
+Allow user to choose audio sources in settings.
+
+Recording flow:
+
+Start Recording
+↓
+capture audio
+↓
+encode to WebM + Opus
+↓
+split audio into chunks
+
+Chunk size configurable:
+
+500ms – 2s
+
+Send chunks via WebSocket to server.
+
+Two WebSocket channels:
+
+/ws/audio
+(send audio chunks)
+
+/ws/transcript
+(receive realtime transcription)
+
+UI popup must include:
+
+Start Recording
+Stop Recording
+Live transcript window
+Download transcript
+Generate summary
+
+Settings UI:
+
+Server URL
+OAuth login
+Audio source selection
+Chunk size
+Realtime mode
+Language mode:
+- manual
+- auto detect
+
+TTL
+Max conversation duration
+
+Implement OAuth2 login flow with redirect to backend server.
+
+Telemost support:
+
+Allow recording only the active tab.
+
+Audio processing:
+
+Use MediaRecorder API.
+
+WebSocket layer:
+
+Reconnect automatically if connection drops.
+
+Transcript viewer:
+
+Append partial transcripts in realtime.
+
+Support downloading transcript as Markdown file.
+
+Structure code cleanly with modules:
+
+recorder
+websocket client
+settings storage
+auth handler
+
+Use browser.storage.local for settings.
+
+Ensure extension is compatible with Chromium browsers.

@@ -1,0 +1,47 @@
+FROM python:3.11-slim
+
+ENV PIP_BREAK_SYSTEM_PACKAGES=1 \
+    PYTHONPATH="/app/server:$PYTHONPATH"
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy project files
+COPY server/pyproject.toml server/poetry.lock* /app/server/
+COPY server/ /app/server/
+COPY configs/ /app/configs/
+
+WORKDIR /app/server
+
+RUN pip install --upgrade pip
+
+# Install Poetry and dependencies
+# RUN pip install --no-cache-dir poetry && \
+#     poetry config virtualenvs.create false && \
+#     poetry install --without dev --no-interaction --no-ansi --no-root
+
+# 1. Устанавливаем poetry и плагин
+RUN pip install --no-cache-dir poetry poetry-plugin-export
+
+# 2. Экспортируем и устанавливаем ЧЕРЕЗ PIP напрямую в системный каталог
+# Флаг --target гарантирует, что пакеты попадут именно туда, где их ищет Python
+RUN poetry export -f requirements.txt --output requirements.txt --without-hashes && \
+    pip install --no-cache-dir -r requirements.txt --target /usr/local/lib/python3.11/site-packages
+
+# Устанавливаем только сам poetry
+# RUN pip install --no-cache-dir poetry
+
+# Устанавливаем зависимости ПРОЕКТА напрямую через pip, 
+# используя возможности самого pip читать зависимости из проекта
+# RUN pip install --no-cache-dir .
+
+# Run Celery worker
+# CMD ["celery", "-A", "worker", "worker", "--loglevel=info", "--queues=asr,diarization,llm,cleanup"]
+CMD ["python", "-m", "celery", "-A", "worker", "worker", "--loglevel=info", "--queues=asr,diarization,llm,cleanup"]
+
+

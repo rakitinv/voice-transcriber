@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Voice Transcriber",
+  "version": "0.1.0",
+  "description": "Record browser audio and stream it to a backend transcription server.",
+  "permissions": ["tabs", "storage", "microphone"],
+  "host_permissions": ["http://*/", "https://*/"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Voice Transcriber"
+  },
+  "icons": {}
+}
+

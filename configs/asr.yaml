@@ -1,0 +1,15 @@
+# ASR providers configuration (skeleton)
+
+default_provider: whisper
+
+providers:
+  whisper:
+    enabled: true
+    model: base
+  faster_whisper:
+    enabled: false
+    model: base
+  vosk:
+    enabled: false
+    model: default
+

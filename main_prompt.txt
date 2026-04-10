@@ -1,0 +1,230 @@
+Create a production-grade open-source speech transcription system.
+
+Architecture must follow client-server design.
+
+Tech stack:
+
+Backend:
+Python
+FastAPI
+Celery
+Redis
+PostgreSQL
+S3 storage (MinIO compatible)
+
+Frontend:
+React + Vite + TypeScript
+
+Clients:
+Chromium browser extension
+CLI uploader
+
+AI components:
+
+ASR providers (plugin architecture)
+- Whisper
+- Faster-Whisper
+- Vosk
+
+Diarization providers
+- WhisperX
+- Pyannote
+- FasterWhisper + Pyannote hybrid
+
+LLM providers (plugin architecture)
+- Ollama
+- LM Studio
+- llama.cpp
+- vLLM
+- OpenAI
+
+System requirements:
+
+The server must support:
+
+1. Realtime transcription via WebSocket
+2. Batch transcription via file upload
+3. Multi-thread transcription for long audio
+4. Speaker diarization (post processing only)
+5. LLM-based conversation summary
+6. Search through transcripts
+7. OAuth2 authentication (Google and Yandex)
+8. Per-user encrypted storage
+
+Audio format:
+
+WebM + Opus
+
+Chunk size configurable:
+500ms – 2s
+
+Realtime modes:
+
+Mode 1:
+chunk -> ASR -> partial transcript
+
+Mode 2:
+window buffer -> ASR -> transcript
+
+Configurable via server settings.
+
+Storage:
+
+Audio and transcripts stored in S3.
+
+Structure:
+
+users/{user_id}/conversations/{conversation_id}/
+  audio.webm
+  transcript.json
+  transcript.md
+  summary.md
+
+Database:
+
+PostgreSQL.
+
+Tables:
+
+users
+conversations
+transcripts
+embeddings
+
+Transcript format:
+
+JSON with timestamps and speaker labels.
+
+Example:
+
+{
+ "segments":[
+  {
+   "speaker":"Speaker 1",
+   "start":10.2,
+   "end":12.4,
+   "text":"Hello"
+  }
+ ]
+}
+
+Security:
+
+OAuth2 login:
+Google
+Yandex
+
+Server-side encryption AES256 per user.
+
+Limits enforced by server:
+
+MAX_DURATION = 2h
+MAX_FILE_SIZE = 500MB
+MAX_TTL = 30 days
+
+Client must respect limits.
+
+Search:
+
+Two modes:
+
+1 fulltext (PostgreSQL)
+2 semantic (embeddings)
+
+User selects mode in UI.
+
+Browser extension:
+
+Functions:
+
+Start recording
+Stop recording
+Live transcript
+Download transcript
+Generate summary
+
+Settings:
+
+Server URL
+OAuth login
+Audio source selection:
+- microphone
+- tab audio
+- system audio
+
+Chunk size
+Realtime mode
+Language mode:
+- manual
+- auto detect
+
+TTL
+Max conversation duration
+
+Telemost support:
+
+via tab capture only.
+
+CLI client:
+
+Upload audio file to server.
+
+Example:
+
+transcriber upload meeting.wav
+
+Web UI:
+
+React + Vite + TypeScript
+
+Pages:
+
+login
+conversation list
+conversation viewer
+search
+settings
+
+Server configuration:
+
+YAML based config.
+
+Example:
+
+server.yaml
+asr.yaml
+llm.yaml
+limits.yaml
+
+Workers:
+
+Celery workers for:
+
+ASR
+Diarization
+LLM processing
+
+Implement plugin architecture for:
+
+ASR providers
+LLM providers
+Diarization providers
+
+Implement Docker deployment:
+
+docker-compose services:
+
+api
+worker
+redis
+postgres
+minio
+webui
+
+Implement logging across all services.
+
+Implement TTL cleanup job.
+
+Implement modular architecture and clean code organization.
+
+Generate full project structure.

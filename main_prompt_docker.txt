@@ -1,0 +1,12 @@
+Create docker deployment for the speech transcription system.
+
+Services:
+
+api (FastAPI)
+worker (Celery)
+redis
+postgres
+minio
+webui
+
+The system must run locally with docker-compose.

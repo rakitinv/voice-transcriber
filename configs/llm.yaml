@@ -1,0 +1,19 @@
+# LLM providers configuration (skeleton)
+
+default_provider: ollama
+
+providers:
+  ollama:
+    enabled: true
+    base_url: http://localhost:11434
+    model: llama3
+  lmstudio:
+    enabled: false
+  llama_cpp:
+    enabled: false
+  vllm:
+    enabled: false
+  openai:
+    enabled: false
+    api_key: CHANGE_ME
+

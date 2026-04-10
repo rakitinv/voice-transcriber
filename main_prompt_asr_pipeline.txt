@@ -1,0 +1,87 @@
+Create an ASR pipeline module for a speech transcription server.
+
+The pipeline must support multiple ASR engines using a plugin architecture.
+
+Supported engines:
+
+Whisper
+Faster-Whisper
+Vosk
+
+Directory structure:
+
+asr/
+ base.py
+ faster_whisper.py
+ whisper.py
+ vosk.py
+ factory.py
+
+Base interface:
+
+class ASRProvider:
+
+    def transcribe_file(self, file_path: str) -> dict:
+        pass
+
+    def transcribe_stream(self, audio_chunk: bytes) -> dict:
+        pass
+
+Realtime transcription modes:
+
+Mode 1
+chunk -> ASR -> partial transcript
+
+Mode 2
+buffer window -> ASR -> transcript
+
+Window size configurable.
+
+Pipeline steps:
+
+audio chunk
+↓
+decode WebM Opus
+↓
+convert to PCM
+↓
+send to ASR engine
+↓
+return transcript segments
+
+Support multi-thread processing of long audio files.
+
+Split audio into segments for parallel transcription.
+
+Merge results while preserving timestamps.
+
+Output transcript format:
+
+{
+ "segments":[
+  {
+   "speaker":"Speaker 1",
+   "start":10.2,
+   "end":12.4,
+   "text":"Hello"
+  }
+ ]
+}
+
+Allow diarization post-processing stage.
+
+Integrate diarization pipeline:
+
+WhisperX
+Pyannote
+Hybrid method
+
+Ensure pipeline can run in Celery workers.
+
+Provide utilities for:
+
+audio chunk decoding
+timestamp merging
+segment alignment
+
+Code must be clean and modular.

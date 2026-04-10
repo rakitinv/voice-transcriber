@@ -1,0 +1,6 @@
+# Limits configuration (skeleton)
+
+max_duration_seconds: 7200       # 2h
+max_file_size_bytes: 524288000   # 500MB
+max_ttl_days: 30
+

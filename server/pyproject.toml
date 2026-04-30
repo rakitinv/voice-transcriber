@@ -24,13 +24,37 @@ pydantic = "^2.8.0"
 pydantic-settings = "^2.3.0"
 pyyaml = "^6.0.1"
 httpx = "^0.27.0"
+faster-whisper = "^1.2.1"
+vosk = "^0.3.45"
+numpy = ">=1.26,<2"
+
+[tool.poetry.group.diarization]
+optional = true
+
+[tool.poetry.group.diarization.dependencies]
+pyannote-audio = "^3.3.2"
+# Pinned pair: unpinned torchaudio ≥2.8 drops torchaudio.AudioMetaData, which breaks pyannote.audio 3.3.x imports.
+torch = "2.4.1"
+torchaudio = "2.4.1"
+# pyannote.audio 3.x still uses hf_hub_download(use_auth_token=...); huggingface_hub v1+ removed it.
+huggingface-hub = "<1.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
 httpx = "^0.27.0"
+websockets = ">=12,<17"
 black = "^24.0.0"
 isort = "^5.13.0"
 ruff = "^0.6.0"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "e2e: full-stack integration (VT_E2E_BASE_URL, VT_E2E_TOKEN)",
+    "audio_acceptance: audio acceptance harness (VT_E2E_ACCEPTANCE_FILES or fixture paths)",
+    "asr_inference: real ASR on sample-1.webm (ffmpeg + models; skip with VT_SKIP_ASR_INFERENCE=1)",
+]
 
 [build-system]
 requires = ["poetry-core"]

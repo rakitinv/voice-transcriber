@@ -1,0 +1,1047 @@
+openapi: 3.0.3
+info:
+  title: Voice Transcriber API
+  version: 0.4.0
+  description: |
+    Источник правды HTTP API (см. [docs/TECHNICAL_SPECIFICATION.md](docs/TECHNICAL_SPECIFICATION.md)).
+
+    **Аутентификация и сессия** (OAuth расширения, refresh сервиса, идентичность): [docs/AUTH_AND_IDENTITY.md](docs/AUTH_AND_IDENTITY.md).
+
+    **WebSocket** (канон контракта: [docs/WEBSOCKET.md](docs/WEBSOCKET.md)):
+    - `ws://{host}/ws/audio/{conversation_id}` — аудио-чанки (не под префиксом `/api`)
+    - `ws://{host}/ws/transcript/{conversation_id}` — обновления транскрипта
+
+    JWT: query `access_token` или `Sec-WebSocket-Protocol: bearer.<JWT>`. Детали — в WEBSOCKET.md.
+
+servers:
+  - url: http://localhost:8000
+    description: Локальная разработка
+  - url: "{baseUrl}"
+    description: Произвольный хост
+    variables:
+      baseUrl:
+        default: http://localhost:8000
+
+tags:
+  - name: auth
+    description: OAuth2 провайдеров, токены сервиса (access/refresh), профиль (`/me`)
+  - name: conversations
+    description: Разговоры
+  - name: upload
+    description: Пакетная загрузка аудио
+  - name: search
+    description: Поиск по транскриптам
+  - name: settings
+    description: Лимиты сервера и пользовательские настройки
+  - name: websocket
+    description: |
+      Realtime (не HTTP JSON). OAS 3 не описывает Upgrade; ниже — зафиксированные URL и параметры.
+      Реализация FastAPI — см. docs/WEBSOCKET.md.
+
+paths:
+  /api/auth/google:
+    get:
+      tags: [auth]
+      summary: Старт OAuth Google
+      responses:
+        "302":
+          description: Redirect на провайдера или Web UI
+  /api/auth/google/callback:
+    get:
+      tags: [auth]
+      summary: Callback OAuth Google
+      responses:
+        "302":
+          description: Redirect в Web UI с токеном
+  /api/auth/yandex:
+    get:
+      tags: [auth]
+      summary: Старт OAuth Yandex
+      responses:
+        "302":
+          description: Redirect
+  /api/auth/yandex/callback:
+    get:
+      tags: [auth]
+      summary: Callback OAuth Yandex
+      responses:
+        "302":
+          description: Redirect
+  /api/auth/me:
+    get:
+      tags: [auth]
+      summary: Текущий пользователь
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserMe"
+        "401":
+          description: Не авторизован
+
+  /api/auth/google/extension/start:
+    get:
+      tags: [auth]
+      operationId: authGoogleExtensionStart
+      summary: URL авторизации Google для расширения
+      description: |
+        Возвращает готовый `auth_url` для `chrome.identity.launchWebAuthFlow`.
+        Предпочтительный способ получить authorize URL (единый источник с сервером); см. [docs/AUTH_AND_IDENTITY.md](docs/AUTH_AND_IDENTITY.md) §6.
+      parameters:
+        - name: redirect_uri
+          in: query
+          required: true
+          description: Результат `chrome.identity.getRedirectURL(...)` — только `https://*.chromiumapp.org/*`.
+          schema:
+            type: string
+            format: uri
+        - name: code_challenge
+          in: query
+          required: true
+          description: PKCE S256 challenge (RFC 7636), см. C7.3.
+          schema:
+            type: string
+            minLength: 43
+            maxLength: 128
+        - name: code_challenge_method
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [S256]
+            default: S256
+        - name: ux_mode
+          in: query
+          required: false
+          description: silent — без UI провайдера если возможно (Google `prompt=none`); interactive — обычный вход.
+          schema:
+            type: string
+            enum: [silent, interactive]
+            default: interactive
+        - name: account_prompt
+          in: query
+          required: false
+          description: force — усиленный выбор аккаунта (Google consent / Yandex force_confirm).
+          schema:
+            type: string
+            enum: [normal, force]
+            default: normal
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExtensionAuthUrlResponse"
+        "400":
+          description: Недопустимый redirect_uri
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /api/auth/yandex/extension/start:
+    get:
+      tags: [auth]
+      operationId: authYandexExtensionStart
+      summary: URL авторизации Yandex для расширения
+      description: |
+        Аналогично `/api/auth/google/extension/start` для провайдера Yandex.
+        См. [docs/AUTH_AND_IDENTITY.md](docs/AUTH_AND_IDENTITY.md).
+      parameters:
+        - name: redirect_uri
+          in: query
+          required: true
+          description: Результат `chrome.identity.getRedirectURL(...)` — только `https://*.chromiumapp.org/*`.
+          schema:
+            type: string
+            format: uri
+        - name: code_challenge
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 43
+            maxLength: 128
+        - name: code_challenge_method
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [S256]
+            default: S256
+        - name: ux_mode
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [silent, interactive]
+            default: interactive
+        - name: account_prompt
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [normal, force]
+            default: normal
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExtensionAuthUrlResponse"
+        "400":
+          description: Недопустимый redirect_uri
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /api/auth/google/extension/finalize:
+    post:
+      tags: [auth]
+      operationId: authGoogleExtensionFinalize
+      summary: Обмен code на токены сервиса (расширение, Google)
+      description: |
+        Обменивает OAuth2 `code` с redirect `*.chromiumapp.org` на **токены сервиса** (JWT доступа; после C7.2 — опционально `refresh_token` сервиса).
+        Токены провайдера клиенту не возвращаются. См. [docs/AUTH_AND_IDENTITY.md](docs/AUTH_AND_IDENTITY.md).
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: code_verifier
+          in: query
+          required: true
+          description: PKCE (RFC 7636), пара к `code_challenge` из `/extension/start`.
+          schema:
+            type: string
+            minLength: 43
+            maxLength: 128
+        - name: state
+          in: query
+          required: true
+          description: Значение `state` из redirect провайдера (подписанный JWT сервера).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExtensionFinalizeResponse"
+        "400":
+          description: Неверный или истёкший code, ошибка обмена
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "401":
+          description: Отказ провайдера или невалидный запрос
+        "409":
+          description: Email уже занят другим пользователем — слияние аккаунтов через Web UI (C7.4)
+
+  /api/auth/yandex/extension/finalize:
+    post:
+      tags: [auth]
+      operationId: authYandexExtensionFinalize
+      summary: Обмен code на токены сервиса (расширение, Yandex)
+      description: Аналогично `/api/auth/google/extension/finalize` для провайдера Yandex.
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: code_verifier
+          in: query
+          required: true
+          description: PKCE (RFC 7636).
+          schema:
+            type: string
+            minLength: 43
+            maxLength: 128
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExtensionFinalizeResponse"
+        "400":
+          description: Неверный или истёкший code
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "401":
+          description: Отказ провайдера
+        "409":
+          description: Email уже занят другим пользователем — слияние аккаунтов через Web UI (C7.4)
+
+  /api/auth/refresh:
+    post:
+      tags: [auth]
+      operationId: authRefresh
+      summary: Новый access JWT по refresh-токену сервиса
+      description: |
+        Продление сессии **без** повторного OAuth провайдера. Контракт и модель — [docs/AUTH_AND_IDENTITY.md](docs/AUTH_AND_IDENTITY.md) §4;
+        дорожная карта реализации: [docs/ROADMAP.md](docs/ROADMAP.md) (C7.2). До внедрения маршрут в API может отсутствовать.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthRefreshRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthRefreshResponse"
+        "400":
+          description: Некорректное тело запроса
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "401":
+          description: Невалидный или отозванный refresh
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /api/conversations:
+    post:
+      tags: [conversations]
+      summary: Создать разговор
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConversationCreate"
+      responses:
+        "201":
+          description: Создано
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Conversation"
+        "400":
+          description: Нарушение лимитов
+    get:
+      tags: [conversations]
+      summary: Список разговоров
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: skip
+          schema: { type: integer, default: 0 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ConversationList"
+
+  /api/conversations/{conversation_id}:
+    parameters:
+      - $ref: "#/components/parameters/ConversationId"
+    get:
+      tags: [conversations]
+      summary: Получить разговор
+      parameters:
+        - in: query
+          name: tier
+          required: false
+          schema:
+            type: string
+            enum: [auto, fast, final]
+            default: auto
+          description: >
+            Вариант транскрипта: auto — активный указатель; fast — ревизия с meta.processing_tier=fast;
+            final — успешная диаризация или последний успешный ASR не из ветки fast (§17 ТЗ).
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Разговор найден
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Conversation"
+        "404":
+          description: Не найдено
+    delete:
+      tags: [conversations]
+      summary: Удалить разговор (soft delete)
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Удалено
+        "404":
+          description: Не найдено
+
+  /api/conversations/{conversation_id}/export:
+    parameters:
+      - $ref: "#/components/parameters/ConversationId"
+      - in: query
+        name: format
+        required: true
+        schema:
+          type: string
+          enum: [md, json]
+      - in: query
+        name: tier
+        required: false
+        schema:
+          type: string
+          enum: [auto, fast, final]
+          default: auto
+        description: Какую ветку экспортировать (те же значения, что у GET разговора).
+    get:
+      tags: [conversations]
+      summary: Экспорт транскрипта
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Файл или JSON
+        "404":
+          description: Не найдено
+
+  /api/conversations/{conversation_id}/audio:
+    parameters:
+      - $ref: "#/components/parameters/ConversationId"
+    get:
+      tags: [conversations]
+      summary: Скачать исходное аудио разговора
+      description: Файл из хранилища (тот же объект, что был загружен), с расшифровкой на стороне сервера.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Бинарные данные аудио (Content-Type по расширению)
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "404":
+          description: Разговор или аудио не найдены
+
+  /api/conversations/{conversation_id}/diarize:
+    parameters:
+      - $ref: "#/components/parameters/ConversationId"
+    post:
+      tags: [conversations]
+      summary: Запустить диаризацию заново (post-hoc)
+      description: >
+        Ставит задачу diarization в очередь. При успехе создаётся новая версия транскрипта и
+        становится активной. Если diarization уже выполняется, возвращает 409.
+        Если diarization.enabled=false в конфигурации сервера — 400.
+      security:
+        - bearerAuth: []
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  conversation_id: { type: string, format: uuid }
+        "400":
+          description: Диаризация отключена в конфигурации сервера
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Не найдено
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "409":
+          description: Diarization already running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "401":
+          description: Не авторизован
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /api/conversations/{conversation_id}/retranscribe:
+    parameters:
+      - $ref: "#/components/parameters/ConversationId"
+    post:
+      tags: [conversations]
+      summary: Повторное распознавание загруженного аудио (новая ревизия ASR)
+      description: >
+        Ставит задачу batch ASR на существующий объект audio в S3. При успехе создаётся новая
+        версия транскрипта kind=asr и она становится активной. Если ASR уже выполняется — 409.
+        При отсутствии загруженного аудио — 400.
+      security:
+        - bearerAuth: []
+      responses:
+        "202":
+          description: Accepted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string }
+                  conversation_id: { type: string, format: uuid }
+        "400":
+          description: Нет аудио
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "404":
+          description: Не найдено
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "409":
+          description: Транскрибация уже выполняется
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "401":
+          description: Не авторизован
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /api/conversations/{conversation_id}/transcripts:
+    parameters:
+      - $ref: "#/components/parameters/ConversationId"
+    get:
+      tags: [conversations]
+      summary: Список версий транскрипта разговора
+      description: Возвращает историю версий (revision/kind/status) для разговора. UI может использовать позже.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  transcripts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TranscriptVersion"
+        "404":
+          description: Не найдено
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+        "401":
+          description: Не авторизован
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /api/upload:
+    post:
+      tags: [upload]
+      summary: Загрузка аудио
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: audio_format
+          required: false
+          description: Явный формат (расширение без точки); иначе — из имени файла или Content-Type
+          schema:
+            type: string
+            enum: [webm, wav, mp3, m4a, aac, ogg, flac, opus]
+      requestBody:
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                conversation_id:
+                  type: string
+                  format: uuid
+                  nullable: true
+      responses:
+        "202":
+          description: Принято к обработке
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [conversation_id, audio_object_ext, status, message]
+                properties:
+                  conversation_id:
+                    type: string
+                    format: uuid
+                  audio_object_ext:
+                    type: string
+                    description: Нормализованное расширение исходного аудио (ключ в S3 audio.<ext>)
+                  status:
+                    type: string
+                    example: accepted
+                  message:
+                    type: string
+        "400":
+          description: Недопустимый audio_format
+        "413":
+          description: Превышен размер файла
+
+  /api/search:
+    get:
+      tags: [search]
+      summary: Поиск по транскриптам (канон — GET)
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema: { type: string }
+        - in: query
+          name: mode
+          schema:
+            type: string
+            enum: [fulltext, semantic]
+            default: fulltext
+        - in: query
+          name: skip
+          schema: { type: integer, default: 0 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 50 }
+      responses:
+        "200":
+          description: Результаты
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchResponse"
+        "400":
+          description: Неверные параметры
+
+  /api/settings/limits:
+    get:
+      tags: [settings]
+      summary: Публичные лимиты сервера и границы realtime
+      description: |
+        Без аутентификации (или с опциональной — по политике развёртывания).
+        Клиенты кэшируют ответ для клампа полей.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServerLimits"
+
+  /api/settings/user:
+    get:
+      tags: [settings]
+      summary: Пользовательские настройки по умолчанию
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserSettings"
+        "501":
+          description: Пока не реализовано (Phase A)
+    patch:
+      tags: [settings]
+      summary: Обновить пользовательские настройки
+      security:
+        - bearerAuth: []
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UserSettingsPatch"
+      responses:
+        "200":
+          description: OK
+        "501":
+          description: Пока не реализовано (Phase A)
+
+  /ws/audio/{conversation_id}:
+    get:
+      tags: [websocket]
+      summary: WebSocket — поток аудио (Upgrade)
+      description: |
+        Не обычный GET JSON. Установление соединения WebSocket на этот путь.
+        Аутентификация: query `access_token=<JWT>` или заголовок `Sec-WebSocket-Protocol` с элементом `bearer.<JWT>`.
+        См. docs/WEBSOCKET.md в репозитории.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: access_token
+          in: query
+          required: false
+          description: Тот же JWT, что для REST Bearer (альтернатива subprotocol bearer.*)
+          schema:
+            type: string
+      responses:
+        "101":
+          description: Switching Protocols (WebSocket)
+        "403":
+          description: Отказ (неверный токен или нет доступа к разговору)
+
+  /ws/transcript/{conversation_id}:
+    get:
+      tags: [websocket]
+      summary: WebSocket — поток транскрипта (Upgrade)
+      description: |
+        Не обычный GET JSON. Аутентификация как у `/ws/audio/{conversation_id}`.
+        См. docs/WEBSOCKET.md в репозитории.
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: access_token
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "101":
+          description: Switching Protocols (WebSocket)
+        "403":
+          description: Отказ
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    ConversationId:
+      name: conversation_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    ErrorDetail:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string
+
+    TranscriptVersion:
+      type: object
+      required: [id, revision, kind, status, created_at, updated_at]
+      properties:
+        id: { type: integer }
+        revision: { type: integer }
+        kind: { type: string }
+        status: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    UserMe:
+      type: object
+      required: [id, email, provider]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Идентификатор пользователя в системе
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+          nullable: true
+          description: Отображаемое имя
+        provider:
+          type: string
+          description: Провайдер последней привязки (например google, yandex)
+
+    ExtensionAuthUrlResponse:
+      type: object
+      required: [auth_url]
+      properties:
+        auth_url:
+          type: string
+          format: uri
+          description: Полный URL для открытия в launchWebAuthFlow
+
+    ExtensionOAuthUser:
+      type: object
+      required: [id, email, provider]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+          nullable: true
+        provider:
+          type: string
+
+    ExtensionFinalizeResponse:
+      type: object
+      required: [access_token, user]
+      properties:
+        access_token:
+          type: string
+          description: Короткоживущий JWT для Authorization Bearer и WebSocket
+        refresh_token:
+          type: string
+          nullable: true
+          description: Долгоживущий токен сервиса для `/api/auth/refresh` (после C7.2; до реализации может отсутствовать в ответе)
+        user:
+          $ref: "#/components/schemas/ExtensionOAuthUser"
+
+    AuthRefreshRequest:
+      type: object
+      required: [refresh_token]
+      properties:
+        refresh_token:
+          type: string
+          description: Refresh-токен сервиса, выданный при login/finalize или предыдущем refresh
+
+    AuthRefreshResponse:
+      type: object
+      required: [access_token]
+      properties:
+        access_token:
+          type: string
+          description: Новый JWT доступа
+        refresh_token:
+          type: string
+          nullable: true
+          description: Новый refresh при ротации на сервере; если null — использовать прежний refresh
+
+    ConversationCreate:
+      type: object
+      properties:
+        title:
+          type: string
+          nullable: true
+        ttl_days:
+          type: integer
+          nullable: true
+
+    Conversation:
+      type: object
+      required: [id, user_id, s3_prefix, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        title:
+          type: string
+          nullable: true
+        s3_prefix:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        recording_session_id:
+          type: string
+          format: uuid
+          description: Идентификатор сессии записи (для цепочки автопродления)
+        previous_conversation_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Предыдущий разговор в цепочке
+        audio_object_ext:
+          type: string
+          description: Расширение исходного аудио в S3 (ключ audio.<ext>), например webm, mp3, wav
+          default: webm
+
+    ConversationList:
+      type: object
+      properties:
+        conversations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Conversation"
+        total:
+          type: integer
+
+    SearchResponse:
+      type: object
+      additionalProperties: true
+
+    ServerLimits:
+      type: object
+      required:
+        - max_duration_seconds
+        - max_file_size_bytes
+        - max_ttl_days
+        - allowed_realtime_modes
+        - default_realtime_mode
+        - chunk_ms_min
+        - chunk_ms_max
+        - max_window_ms
+        - autoprolong_enabled
+        - autoprolong_tail_seconds
+      properties:
+        max_duration_seconds:
+          type: integer
+        max_file_size_bytes:
+          type: integer
+        max_ttl_days:
+          type: integer
+        allowed_realtime_modes:
+          type: array
+          items:
+            type: string
+            enum: [chunk, windowed]
+        default_realtime_mode:
+          type: string
+          enum: [chunk, windowed]
+        chunk_ms_min:
+          type: integer
+        chunk_ms_max:
+          type: integer
+        max_window_ms:
+          type: integer
+        autoprolong_enabled:
+          type: boolean
+        autoprolong_tail_seconds:
+          type: number
+          description: Догрузка хвоста в разговор A перед стартом B (секунды)
+        diarization_turn_level_retranscription_default:
+          type: boolean
+          description: Серверный дефолт (YAML/env) — повторный ASR на каждый turn при диаризации
+        asr_vad_defaults:
+          type: object
+          nullable: true
+          description: Текущие дефолты VAD faster-whisper из окружения сервера (для подсказок в UI)
+          properties:
+            vad_filter:
+              type: boolean
+            min_silence_ms:
+              type: integer
+            threshold:
+              type: number
+              nullable: true
+            speech_pad_ms:
+              type: integer
+              nullable: true
+
+    UserSettings:
+      type: object
+      additionalProperties: true
+      properties:
+        default_language:
+          type: string
+        default_ttl_days:
+          type: integer
+        search_mode:
+          type: string
+          enum: [fulltext, semantic]
+        asr_vad_use_custom:
+          type: boolean
+          description: Если false — используются только переменные окружения сервера (docker)
+        asr_vad_filter:
+          type: boolean
+        asr_vad_min_silence_ms:
+          type: integer
+        asr_vad_threshold:
+          type: number
+          nullable: true
+        asr_vad_speech_pad_ms:
+          type: integer
+          nullable: true
+        diarization_turn_level_retranscription_use_custom:
+          type: boolean
+          description: Если false — используется серверный дефолт из limits
+        diarization_turn_level_retranscription:
+          type: boolean
+          description: Эффективное значение (учитывает override пользователя)
+
+    UserSettingsPatch:
+      type: object
+      additionalProperties: true
+      properties:
+        default_language:
+          type: string
+        default_ttl_days:
+          type: integer
+        search_mode:
+          type: string
+          enum: [fulltext, semantic]
+        asr_vad_use_custom:
+          type: boolean
+        asr_vad_filter:
+          type: boolean
+        asr_vad_min_silence_ms:
+          type: integer
+        asr_vad_threshold:
+          type: number
+          nullable: true
+        asr_vad_speech_pad_ms:
+          type: integer
+          nullable: true
+        diarization_turn_level_retranscription_use_custom:
+          type: boolean
+        diarization_turn_level_retranscription:
+          type: boolean

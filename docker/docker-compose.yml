@@ -1,6 +1,25 @@
-version: "3.9"
+# Явное имя проекта: контейнеры и тома не смешиваются со стеками вроде Ragflow,
+# у которых прежде совпадало имя проекта с каталогом `docker` (префикс docker-*).
+name: voice-transcriber
 
 services:
+  # Однократный прогон миграций до старта api/worker (тот же образ, что у api).
+  migrate:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    environment:
+      PYTHONPATH: /app/server
+      VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
+    volumes:
+      - ../configs:/app/configs:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["python", "-m", "alembic", "upgrade", "head"]
+    networks:
+      - voice-transcriber
+
   api:
     build:
       context: ..
@@ -12,25 +31,62 @@ services:
       PYTHONPATH: /app/server
       VT_ENVIRONMENT: production
       VT_WEBUI_ORIGIN: http://localhost:3002
+      # Браузерные OAuth redirect_uri для Web UI должны совпадать с консолью провайдера (хост:порт снаружи Docker).
+      VT_PUBLIC_API_URL: ${VT_PUBLIC_API_URL:-http://localhost:8002}
+      # Необязательно: явный список Origin для CORS (axios withCredentials). Пусто = localhost/127 + regex.
+      VT_CORS_ORIGINS: ${VT_CORS_ORIGINS:-}
       VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
       VT_REDIS_URL: redis://redis:6379/0
       VT_S3_ENDPOINT: http://minio:9000
       VT_S3_BUCKET: voice-transcriber
       VT_S3_ACCESS_KEY: minioadmin
       VT_S3_SECRET_KEY: minioadmin
+      # Частичные транскрипты между несколькими репликами API (см. server/app/api/ws_hub.py).
+      VT_TRANSCRIPT_REDIS: "1"
+      # Опционально: единый секрет JWT для API/воркера/CLI (см. server/core/security.py). Иначе — из configs/server.yaml (Google client_secret).
+      VT_JWT_SECRET: ${VT_JWT_SECRET:-}
+      # ASR quality tuning (faster-whisper)
+      VT_ASR_MODEL: ${VT_ASR_MODEL:-medium}
+      VT_ASR_DEVICE: ${VT_ASR_DEVICE:-cpu}
+      VT_ASR_COMPUTE_TYPE: ${VT_ASR_COMPUTE_TYPE:-int8}
+      VT_ASR_BEAM_SIZE: ${VT_ASR_BEAM_SIZE:-10}
+      VT_ASR_VAD_FILTER: ${VT_ASR_VAD_FILTER:-1}
+      VT_ASR_VAD_MIN_SILENCE_MS: ${VT_ASR_VAD_MIN_SILENCE_MS:-400}
+      VT_ASR_VAD_THRESHOLD: ${VT_ASR_VAD_THRESHOLD:-}
+      VT_ASR_VAD_SPEECH_PAD_MS: ${VT_ASR_VAD_SPEECH_PAD_MS:-}
+      VT_ASR_TEMPERATURE: ${VT_ASR_TEMPERATURE:-0.0}
+      VT_ASR_PATIENCE: ${VT_ASR_PATIENCE:-1.0}
+      # Keep context for full-file/realtime (diarization-worker overrides to 0)
+      VT_ASR_CONDITION_ON_PREVIOUS_TEXT: ${VT_ASR_CONDITION_ON_PREVIOUS_TEXT:-1}
     volumes:
       - ../configs:/app/configs:ro
       - ../server/logs:/app/server/logs
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       redis:
         condition: service_started
       minio:
         condition: service_started
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)",
+        ]
+      interval: 10s
+      timeout: 8s
+      retries: 6
+      start_period: 40s
     networks:
       - voice-transcriber
 
+  # Fast / general Celery worker: отвечает за "asr" (legacy/прочие задачи), llm, cleanup.
+  # Финальный ASR вынесен в worker-final (queue asr_final) чтобы не конкурировать по CPU/GPU.
   worker:
     build:
       context: ..
@@ -44,17 +100,266 @@ services:
       VT_S3_BUCKET: voice-transcriber
       VT_S3_ACCESS_KEY: minioadmin
       VT_S3_SECRET_KEY: minioadmin
+      VT_JWT_SECRET: ${VT_JWT_SECRET:-}
+      # Celery Redis broker: seconds; must exceed longest transcribe (ТЗ §17). Default 4h.
+      VT_CELERY_VISIBILITY_TIMEOUT: ${VT_CELERY_VISIBILITY_TIMEOUT:-14400}
+      # ASR quality tuning (must match API for realtime consistency)
+      VT_ASR_MODEL: ${VT_ASR_MODEL:-medium}
+      VT_ASR_DEVICE: ${VT_ASR_DEVICE:-cpu}
+      VT_ASR_COMPUTE_TYPE: ${VT_ASR_COMPUTE_TYPE:-int8}
+      VT_ASR_BEAM_SIZE: ${VT_ASR_BEAM_SIZE:-10}
+      VT_ASR_VAD_FILTER: ${VT_ASR_VAD_FILTER:-1}
+      VT_ASR_VAD_MIN_SILENCE_MS: ${VT_ASR_VAD_MIN_SILENCE_MS:-400}
+      VT_ASR_VAD_THRESHOLD: ${VT_ASR_VAD_THRESHOLD:-}
+      VT_ASR_VAD_SPEECH_PAD_MS: ${VT_ASR_VAD_SPEECH_PAD_MS:-}
+      VT_ASR_TEMPERATURE: ${VT_ASR_TEMPERATURE:-0.0}
+      VT_ASR_PATIENCE: ${VT_ASR_PATIENCE:-1.0}
+      VT_ASR_CONDITION_ON_PREVIOUS_TEXT: ${VT_ASR_CONDITION_ON_PREVIOUS_TEXT:-1}
     volumes:
       - ../configs:/app/configs:ro
       - ../server/logs:/app/server/logs
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_started
       postgres:
         condition: service_healthy
       minio:
         condition: service_started
-    command: python -m celery -A workers.celery_app.celery_app worker --loglevel=info --queues=asr,diarization,llm,cleanup
+    command: python -m celery -A workers.celery_app.celery_app worker --loglevel=info --queues=asr,llm,cleanup
+    networks:
+      - voice-transcriber
+
+  # Final ASR worker: выполняет тяжелые задачи (upload, retranscribe, finalize->final).
+  worker-final:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.worker
+    environment:
+      PYTHONPATH: /app/server
+      VT_ENVIRONMENT: production
+      VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
+      VT_REDIS_URL: redis://redis:6379/0
+      VT_S3_ENDPOINT: http://minio:9000
+      VT_S3_BUCKET: voice-transcriber
+      VT_S3_ACCESS_KEY: minioadmin
+      VT_S3_SECRET_KEY: minioadmin
+      VT_JWT_SECRET: ${VT_JWT_SECRET:-}
+      # Celery Redis broker: seconds; must exceed longest transcribe (ТЗ §17). Default 4h.
+      VT_CELERY_VISIBILITY_TIMEOUT: ${VT_CELERY_VISIBILITY_TIMEOUT:-14400}
+      # ASR quality tuning for final (default matches baseline).
+      VT_ASR_MODEL: ${VT_ASR_MODEL:-medium}
+      VT_ASR_DEVICE: ${VT_ASR_DEVICE:-cpu}
+      VT_ASR_COMPUTE_TYPE: ${VT_ASR_COMPUTE_TYPE:-int8}
+      VT_ASR_BEAM_SIZE: ${VT_ASR_BEAM_SIZE:-10}
+      VT_ASR_VAD_FILTER: ${VT_ASR_VAD_FILTER:-1}
+      VT_ASR_VAD_MIN_SILENCE_MS: ${VT_ASR_VAD_MIN_SILENCE_MS:-400}
+      VT_ASR_VAD_THRESHOLD: ${VT_ASR_VAD_THRESHOLD:-}
+      VT_ASR_VAD_SPEECH_PAD_MS: ${VT_ASR_VAD_SPEECH_PAD_MS:-}
+      VT_ASR_TEMPERATURE: ${VT_ASR_TEMPERATURE:-0.0}
+      VT_ASR_PATIENCE: ${VT_ASR_PATIENCE:-1.0}
+      VT_ASR_CONDITION_ON_PREVIOUS_TEXT: ${VT_ASR_CONDITION_ON_PREVIOUS_TEXT:-1}
+    volumes:
+      - ../configs:/app/configs:ro
+      - ../server/logs:/app/server/logs
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    command: python -m celery -A workers.celery_app.celery_app worker --loglevel=info --queues=asr_final
+    networks:
+      - voice-transcriber
+
+  # GPU variant for final ASR. Requires NVIDIA Container Toolkit (WSL2/Linux).
+  # Start with: docker compose --profile gpu up -d worker-final-gpu
+  worker-final-gpu:
+    profiles: ["gpu"]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.worker.gpu
+    environment:
+      PYTHONPATH: /app/server
+      VT_ENVIRONMENT: production
+      VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
+      VT_REDIS_URL: redis://redis:6379/0
+      VT_S3_ENDPOINT: http://minio:9000
+      VT_S3_BUCKET: voice-transcriber
+      VT_S3_ACCESS_KEY: minioadmin
+      VT_S3_SECRET_KEY: minioadmin
+      VT_JWT_SECRET: ${VT_JWT_SECRET:-}
+      VT_CELERY_VISIBILITY_TIMEOUT: ${VT_CELERY_VISIBILITY_TIMEOUT:-14400}
+      # ASR on GPU (faster-whisper / CTranslate2)
+      VT_ASR_DEFAULT_PROVIDER: ${VT_ASR_DEFAULT_PROVIDER:-faster_whisper}
+      VT_ASR_DEVICE: ${VT_DIARIZATION_ASR_DEVICE:-cuda}
+      VT_ASR_COMPUTE_TYPE: ${VT_DIARIZATION_ASR_COMPUTE_TYPE:-float16}
+      VT_ASR_MODEL: ${VT_ASR_MODEL:-medium}
+      VT_ASR_BEAM_SIZE: ${VT_ASR_BEAM_SIZE:-10}
+      VT_ASR_VAD_FILTER: ${VT_ASR_VAD_FILTER:-1}
+      VT_ASR_VAD_MIN_SILENCE_MS: ${VT_ASR_VAD_MIN_SILENCE_MS:-400}
+      VT_ASR_TEMPERATURE: ${VT_ASR_TEMPERATURE:-0.0}
+      VT_ASR_PATIENCE: ${VT_ASR_PATIENCE:-1.0}
+      VT_ASR_CONDITION_ON_PREVIOUS_TEXT: ${VT_ASR_CONDITION_ON_PREVIOUS_TEXT:-1}
+      # Parallel chunking for long files (ТЗ §17 step 3): chord of slices + merge.
+      VT_ASR_PARALLEL_CHUNKS: ${VT_ASR_PARALLEL_CHUNKS:-1}
+      VT_ASR_CHUNK_SECONDS: ${VT_ASR_CHUNK_SECONDS:-600}
+      VT_ASR_CHUNK_OVERLAP_SECONDS: ${VT_ASR_CHUNK_OVERLAP_SECONDS:-1.0}
+      # Common NVIDIA envs (harmless on non-NVIDIA runtimes)
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: ["gpu"]
+    volumes:
+      - ../configs:/app/configs:ro
+      - ../server/logs:/app/server/logs
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    command: python -m celery -A workers.celery_app.celery_app worker --loglevel=info --queues=asr_final --concurrency=${VT_ASR_FINAL_CONCURRENCY:-1}
+    networks:
+      - voice-transcriber
+
+  # Diarization Celery worker — CPU PyTorch wheels (default for dev; smaller image).
+  # GPU/CUDA stack: use service diarization-worker-gpu (compose profile `gpu`).
+  # Do not run both workers at once unless you intend to share the `diarization` queue.
+  diarization-worker:
+    profiles: ["diarization"]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.diarization
+      args:
+        DIARIZATION_TORCH: cpu
+    environment:
+      PYTHONPATH: /app/server
+      VT_CELERY_ENABLE_DIARIZATION: "1"
+      VT_ENVIRONMENT: production
+      VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
+      VT_REDIS_URL: redis://redis:6379/0
+      VT_S3_ENDPOINT: http://minio:9000
+      VT_S3_BUCKET: voice-transcriber
+      VT_S3_ACCESS_KEY: minioadmin
+      VT_S3_SECRET_KEY: minioadmin
+      VT_JWT_SECRET: ${VT_JWT_SECRET:-}
+      VT_CELERY_VISIBILITY_TIMEOUT: ${VT_CELERY_VISIBILITY_TIMEOUT:-14400}
+      # HuggingFace token for pyannote model downloads (optional in offline mode)
+      VT_HF_TOKEN: ${VT_HF_TOKEN:-}
+      # Also expose token in standard HF vars for huggingface_hub/pyannote
+      HF_TOKEN: ${VT_HF_TOKEN:-}
+      HUGGINGFACE_HUB_TOKEN: ${VT_HF_TOKEN:-}
+      # ASR params for turn-level retranscription inside diarization task
+      # Use a higher-accuracy model for diarization re-transcription only
+      VT_ASR_MODEL: ${VT_DIARIZATION_ASR_MODEL:-medium}
+      VT_ASR_DEVICE: ${VT_ASR_DEVICE:-cpu}
+      VT_ASR_COMPUTE_TYPE: ${VT_ASR_COMPUTE_TYPE:-int8}
+      VT_ASR_BEAM_SIZE: ${VT_ASR_BEAM_SIZE:-15}
+      # For short turns VAD can swallow quiet endings; disable by default for diarization slices
+      VT_ASR_VAD_FILTER: ${VT_DIARIZATION_ASR_VAD_FILTER:-0}
+      VT_ASR_VAD_MIN_SILENCE_MS: ${VT_ASR_VAD_MIN_SILENCE_MS:-250}
+      # Stronger decoding for diarization slices (quality > speed)
+      VT_ASR_TEMPERATURE: ${VT_ASR_TEMPERATURE:-0.0}
+      VT_ASR_PATIENCE: ${VT_ASR_PATIENCE:-1.0}
+      # Prevent context "sticking" across very short windows
+      VT_ASR_CONDITION_ON_PREVIOUS_TEXT: ${VT_ASR_CONDITION_ON_PREVIOUS_TEXT:-0}
+      # Hotword biasing for short turns (comma-separated)
+      VT_ASR_HOTWORDS: ${VT_DIARIZATION_ASR_HOTWORDS:-уделённое,уделённое время,вам также,всего хорошего,до свидания}
+      # Gentle prompt for common polite dialog; helps small words and endings
+      VT_ASR_INITIAL_PROMPT: ${VT_DIARIZATION_ASR_INITIAL_PROMPT:-Спасибо за уделённое время. Я желаю вам хорошего дня. Вам также всего хорошего. До свидания.}
+      # Drop extremely short turns to avoid spurious "Thank you"
+      VT_DIARIZATION_MIN_TURN_SECONDS: ${VT_DIARIZATION_MIN_TURN_SECONDS:-0.3}
+      # Pad turns a bit to avoid cutting off words at boundaries
+      VT_DIARIZATION_TURN_PAD_SECONDS: ${VT_DIARIZATION_TURN_PAD_SECONDS:-0.8}
+      # Asymmetric padding: more BEFORE, minimal AFTER (prevents cross-speaker bleed)
+      VT_DIARIZATION_TURN_PAD_BEFORE_SECONDS: ${VT_DIARIZATION_TURN_PAD_BEFORE_SECONDS:-0.8}
+      VT_DIARIZATION_TURN_PAD_AFTER_SECONDS: ${VT_DIARIZATION_TURN_PAD_AFTER_SECONDS:-0.15}
+      # Merge adjacent same-speaker turns (reduces ASR calls, improves continuity)
+      VT_DIARIZATION_MERGE_GAP_SECONDS: ${VT_DIARIZATION_MERGE_GAP_SECONDS:-0.35}
+    volumes:
+      - ../configs:/app/configs:ro
+      - ../server/logs:/app/server/logs
+      - diarization-models:/models
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    networks:
+      - voice-transcriber
+
+  # Optional GPU-enabled diarization worker (Linux / WSL2 with NVIDIA Container Toolkit).
+  # Same Dockerfile as diarization-worker; build arg installs CUDA-capable torch from Poetry export.
+  diarization-worker-gpu:
+    profiles: ["gpu"]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.diarization
+      args:
+        DIARIZATION_TORCH: cuda
+    environment:
+      PYTHONPATH: /app/server
+      VT_CELERY_ENABLE_DIARIZATION: "1"
+      VT_ENVIRONMENT: production
+      VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
+      VT_REDIS_URL: redis://redis:6379/0
+      VT_S3_ENDPOINT: http://minio:9000
+      VT_S3_BUCKET: voice-transcriber
+      VT_S3_ACCESS_KEY: minioadmin
+      VT_S3_SECRET_KEY: minioadmin
+      VT_JWT_SECRET: ${VT_JWT_SECRET:-}
+      VT_CELERY_VISIBILITY_TIMEOUT: ${VT_CELERY_VISIBILITY_TIMEOUT:-14400}
+      VT_HF_TOKEN: ${VT_HF_TOKEN:-}
+      HF_TOKEN: ${VT_HF_TOKEN:-}
+      HUGGINGFACE_HUB_TOKEN: ${VT_HF_TOKEN:-}
+      # Run ASR re-transcription on GPU in diarization worker
+      VT_ASR_DEVICE: ${VT_DIARIZATION_ASR_DEVICE:-cuda}
+      VT_ASR_COMPUTE_TYPE: ${VT_DIARIZATION_ASR_COMPUTE_TYPE:-float16}
+      # Use a higher-accuracy model for diarization re-transcription only
+      VT_ASR_MODEL: ${VT_DIARIZATION_ASR_MODEL:-medium}
+      VT_ASR_VAD_FILTER: ${VT_DIARIZATION_ASR_VAD_FILTER:-0}
+      VT_ASR_HOTWORDS: ${VT_DIARIZATION_ASR_HOTWORDS:-уделённое,уделённое время,вам также,всего хорошего,до свидания}
+      VT_ASR_INITIAL_PROMPT: ${VT_DIARIZATION_ASR_INITIAL_PROMPT:-Спасибо за уделённое время. Я желаю вам хорошего дня. Вам также всего хорошего. До свидания.}
+      # Enable warmup/self-check at startup (recommended for offline mode)
+      VT_DIARIZATION_WARMUP: ${VT_DIARIZATION_WARMUP:-1}
+      # Common NVIDIA envs (harmless on non-NVIDIA runtimes)
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - ../configs:/app/configs:ro
+      - ../server/logs:/app/server/logs
+      - diarization-models:/models
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     networks:
       - voice-transcriber
 
@@ -67,14 +372,17 @@ services:
     ports:
       - "3002:3000"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     networks:
       - voice-transcriber
 
   redis:
     image: redis:7-alpine
+    # По умолчанию 6382 — 6381 часто занят другим Redis.
+    # Переопределение: REDIS_PUBLISH_PORT=6383 docker compose up -d
     ports:
-      - "6381:6379"
+      - "${REDIS_PUBLISH_PORT:-6382}:6379"
     volumes:
       - redis-data:/data
     networks:
@@ -86,8 +394,10 @@ services:
       POSTGRES_DB: voice
       POSTGRES_USER: voice
       POSTGRES_PASSWORD: voice
+    # По умолчанию 5435 — 5434 часто занят другим Postgres (другой compose).
+    # Переопределение: POSTGRES_PUBLISH_PORT=5436 docker compose up -d
     ports:
-      - "5434:5432"
+      - "${POSTGRES_PUBLISH_PORT:-5435}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -100,9 +410,11 @@ services:
 
   minio:
     image: minio/minio:latest
+    # По умолчанию 9012/9013 — реже конфликтуют с другим MinIO (9000–9003, 9002).
+    # Переопределение: MINIO_PUBLISH_PORT=9100 MINIO_CONSOLE_PUBLISH_PORT=9101 docker compose up
     ports:
-      - "9002:9000"
-      - "9003:9001"
+      - "${MINIO_PUBLISH_PORT:-9012}:9000"
+      - "${MINIO_CONSOLE_PUBLISH_PORT:-9013}:9001"
     environment:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
@@ -116,6 +428,7 @@ volumes:
   postgres-data:
   redis-data:
   minio-data:
+  diarization-models:
 
 networks:
   voice-transcriber:

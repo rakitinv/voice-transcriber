@@ -46,13 +46,13 @@ logs/
 *.sqlite
 
 # Alembic
-alembic/versions/*.py
-!alembic/versions/.gitkeep
+# Track Alembic migrations in git (critical for deploys).
+alembic/versions/__pycache__/
+alembic/versions/*.pyc
 
 # Testing
 .pytest_cache/
 .coverage
 htmlcov/
 
-# Poetry
-poetry.lock
+# Poetry (lockfile is tracked for reproducible installs)

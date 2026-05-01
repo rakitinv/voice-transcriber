@@ -29,9 +29,28 @@
 
 .meta {
   display: flex;
-  gap: 1rem;
+  flex-direction: column;
+  gap: 0.35rem;
   font-size: 0.875rem;
   color: var(--fg-muted);
+}
+
+.metaRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  align-items: baseline;
+}
+
+.metaLabel {
+  font-weight: 600;
+  color: var(--fg);
+  min-width: 12rem;
+}
+
+.metaValue {
+  flex: 1;
+  min-width: 12rem;
 }
 
 .summary {
@@ -55,6 +74,28 @@
   color: var(--fg-muted);
 }
 
+.summaryHint {
+  margin: 0.35rem 0 0;
+  font-size: 0.8125rem;
+  color: var(--fg-muted);
+}
+
+.sessionSummaryMeta {
+  margin: 0 0 0.35rem;
+  font-size: 0.8125rem;
+  color: var(--fg-muted);
+}
+
+.sessionSummaryBody {
+  margin: 0.5rem 0 0;
+  padding: 0;
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  color: var(--fg-muted);
+}
+
 .status,
 .error {
   margin: 0;
@@ -67,4 +108,19 @@
 
 .error {
   color: var(--danger, #dc3545);
+}
+
+.processingBanner {
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  color: var(--fg);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+}
+
+.processingInline {
+  font-weight: 600;
+  color: var(--accent);
 }

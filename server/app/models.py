@@ -6,6 +6,7 @@ Tables:
 - conversations
 - transcripts
 - embeddings
+- recording_session_summaries (§7.6 chain summary)
 """
 
 from __future__ import annotations
@@ -94,6 +95,47 @@ class UserOAuthIdentity(Base):
     user: Mapped["User"] = relationship(back_populates="oauth_identities")
 
 
+class UserApiKey(Base):
+    """Long-lived API key for CLI/automation (Phase C6); store only SHA-256 of secret."""
+
+    __tablename__ = "user_api_keys"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    key_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    label: Mapped[str | None] = mapped_column(String(128))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+    )
+
+    user: Mapped["User"] = relationship()
+
+
+class AuthRefreshSession(Base):
+    """Opaque refresh token for long-lived service session (C7.2); store only SHA-256 hash."""
+
+    __tablename__ = "auth_refresh_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+    )
+
+    user: Mapped["User"] = relationship()
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
 
@@ -161,6 +203,33 @@ class Conversation(Base):
     active_transcript: Mapped["Transcript | None"] = relationship(
         foreign_keys=[active_transcript_id],
         post_update=True,
+    )
+
+
+class RecordingSessionSummary(Base):
+    """Rolling LLM summary for an autoprolong chain (shared recording_session_id)."""
+
+    __tablename__ = "recording_session_summaries"
+
+    recording_session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    summary_md: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+    meta: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
     )
 
 

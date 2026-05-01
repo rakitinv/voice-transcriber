@@ -1,0 +1,26 @@
+[Unit]
+Description=Voice Transcriber diarization worker (GPU, Docker Compose profile)
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Directory with docker-compose.yml
+WorkingDirectory=/opt/voice-transcriber/docker
+
+# Optional: environment overrides (tokens, secrets, publish ports, etc.)
+EnvironmentFile=-/etc/voice-transcriber/voice-transcriber.env
+
+# Guard: fail fast if GPU tooling is missing/broken.
+# If `nvidia-smi` is not available on the host, install NVIDIA driver + NVIDIA Container Toolkit first.
+ExecStartPre=/usr/bin/nvidia-smi
+
+# Start GPU diarization worker only.
+ExecStart=/usr/bin/docker compose --profile gpu up -d --build diarization-worker-gpu
+ExecStop=/usr/bin/docker compose --profile gpu stop diarization-worker-gpu
+
+[Install]
+WantedBy=multi-user.target
+

@@ -49,7 +49,11 @@ class ASRProvider(ABC):
 
     @abstractmethod
     def transcribe(
-        self, audio_path: str, language: Optional[str] = None
+        self,
+        audio_path: str,
+        language: Optional[str] = None,
+        *,
+        vad_preferences: Optional[dict] = None,
     ) -> List[ASRSegment]:
         """
         Transcribe an audio file and return segments.
@@ -64,7 +68,13 @@ class ASRProvider(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def transcribe_chunk(self, audio_data: bytes, language: Optional[str] = None) -> str:
+    def transcribe_chunk(
+        self,
+        audio_data: bytes,
+        language: Optional[str] = None,
+        *,
+        vad_preferences: Optional[dict] = None,
+    ) -> str:
         """
         Transcribe a small audio chunk (for realtime mode).
 

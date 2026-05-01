@@ -1,9 +1,5 @@
 """
-Celery task modules.
+Celery task modules (asr, diarization, llm, cleanup).
 
-This package contains:
-- asr: ASR transcription tasks
-- diarization: Speaker diarization tasks
-- llm: LLM summary generation tasks
-- cleanup: TTL cleanup tasks
+Регистрация @celery_app.task: см. импорты в конце `workers/celery_app.py`.
 """

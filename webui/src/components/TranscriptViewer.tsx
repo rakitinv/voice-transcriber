@@ -4,6 +4,8 @@ import styles from "./TranscriptViewer.module.css";
 interface TranscriptViewerProps {
   segments: TranscriptSegment[];
   className?: string;
+  emptyLabel?: string;
+  isProcessing?: boolean;
 }
 
 function formatTime(seconds: number): string {
@@ -12,11 +14,22 @@ function formatTime(seconds: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-export function TranscriptViewer({ segments, className }: TranscriptViewerProps) {
+export function TranscriptViewer({
+  segments,
+  className,
+  emptyLabel,
+  isProcessing,
+}: TranscriptViewerProps) {
   if (!segments?.length) {
+    const label = emptyLabel ?? "Расшифровка пока недоступна.";
     return (
       <div className={`${styles.wrapper} ${className ?? ""}`}>
-        <p className={styles.empty}>No transcript available.</p>
+        <p className={styles.empty}>
+          <span className={styles.emptyRow} aria-busy={Boolean(isProcessing)}>
+            {isProcessing ? <span className={styles.spinner} aria-hidden="true" /> : null}
+            <span>{label}</span>
+          </span>
+        </p>
       </div>
     );
   }

@@ -1,0 +1,2 @@
+[console_scripts]
+transcriber = voice_transcriber_cli.main:main

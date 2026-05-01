@@ -8,8 +8,8 @@ The current state is focused on **project structure only** – core logic and im
 - **Backend (`server/`)**: FastAPI API, Celery workers, Redis, PostgreSQL, MinIO-compatible S3, plugin architecture for ASR, diarization, and LLM providers.
 - **Web UI (`webui/`)**: React + Vite + TypeScript single-page application.
 - **Browser Extension (`browser-extension/`)**: Chromium extension for realtime recording and transcription.
-- **CLI Client (`cli/` – planned)**: Command-line uploader for batch transcription.
-- **Configs (`configs/`)**: YAML configuration files for server, ASR, LLM, limits.
+- **CLI Client (`cli/`)**: Installable **`transcriber`** command (`pip install -e ./cli`) — upload, conversations, export, audio download; same API as Web UI (see `cli/README.md`).
+- **Configs (`configs/`)**: YAML configuration files for server, ASR, diarization, embeddings (semantic search), LLM, limits.
 - **Docker (`docker/`)**: `docker-compose` and service-level Dockerfiles for local deployment.
 - **Docs (`docs/`)**: Additional architecture and integration documentation.
 

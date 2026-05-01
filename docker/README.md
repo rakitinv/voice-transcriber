@@ -4,28 +4,76 @@ Run the full speech transcription stack locally with Docker Compose.
 
 ## Services
 
-| Service  | Port(s)      | Description        |
-|----------|--------------|--------------------|
-| **api**  | 8000         | FastAPI backend    |
-| **webui**| 3000         | React frontend     |
-| **worker** | —         | Celery worker (ASR, diarization, LLM, cleanup) |
-| **postgres** | 5432     | PostgreSQL 16      |
-| **redis**  | 6379       | Redis 7            |
-| **minio**  | 9000, 9001  | MinIO (S3-compatible storage and console) |
+| Service  | Port(s) на хосте | Описание |
+|----------|------------------|----------|
+| **api**  | **8002**→8000 | FastAPI (см. `ports` в compose) |
+| **webui**| **3002**→3000 | React (Vite build) |
+| **worker** | —         | Celery: **`VT_MAIN_WORKER_QUEUES`** по умолчанию **asr_fast**, **asr**, **llm**, **cleanup** |
+| **worker-llm** | **`scale_llm`** | Только очередь **llm** (§7.6 summary, embeddings); поднимайте вместе с **`VT_MAIN_WORKER_QUEUES=asr_fast,asr,cleanup`** у **worker**, чтобы не было двух потребителей **llm** |
+| **worker-final** | —   | Celery (очередь **asr_final** — тяжелый/финальный ASR по ТЗ §17, CPU) |
+| **worker-final-gpu** | — | Celery (очередь **asr_final**, **GPU**; образ **`Dockerfile.worker.gpu`**, CUDA-библиотеки через PyPI wheels + `LD_LIBRARY_PATH`; профиль compose **`gpu`**) |
+| **diarization-worker** | — | Diarization Celery worker: **CPU**-сборка PyTorch (`build.args.DIARIZATION_TORCH=cpu`), очередь **diarization** (compose profile `diarization`) |
+| **diarization-worker-gpu** | — | Diarization Celery worker: **CUDA**-сборка PyTorch (`DIARIZATION_TORCH=cuda`), профиль compose **`gpu`** |
+| **migrate** | —        | Однократно: `alembic upgrade head` |
+| **postgres** | 5435→5432 (`POSTGRES_PUBLISH_PORT`) | PostgreSQL 16 |
+| **redis**  | 6382→6379 (`REDIS_PUBLISH_PORT`) | Redis 7 |
+| **minio**  | 9012→9000, 9013→9001 (`MINIO_*_PUBLISH_PORT`) | MinIO S3 + консоль |
 
-## Quick start
+## Имя проекта Compose
 
-From the **repository root** (parent of `docker/`):
+В `docker-compose.yml` задано **`name: voice-transcriber`**: префикс контейнеров и именованных томов отличается от других compose-файлов, которые раньше могли использовать имя проекта **`docker`** (например Ragflow: `docker-ragflow-cpu-1` и предупреждение про orphan containers).
+
+При **первом** запуске после смены имени Compose создаст новые тома вида `voice-transcriber_*`. Старые данные в томах `docker_*` к этому проекту не подключаются автоматически; при необходимости перенесите БД дампом или вручную привяжите нужный volume.
+
+## Quick start (Phase A — полный стек)
+
+Из каталога **`docker/`** (имя проекта в compose: **`voice-transcriber`**):
 
 ```bash
 cd docker
 docker compose up --build
 ```
 
-- **Web UI:** http://localhost:3000  
-- **API:** http://localhost:8000  
-- **API health:** http://localhost:8000/health  
-- **MinIO console:** http://localhost:9001 (minioadmin / minioadmin)
+Порты **на хосте** (см. `docker-compose.yml`):
+
+| Сервис | URL на хосте |
+|--------|----------------|
+| **Web UI** | http://localhost:**3002** (контейнер слушает 3000) |
+| **API** | http://localhost:**8002** (внутри контейнера порт **8000**) |
+| **API health** | http://localhost:8002/health |
+| **Prometheus metrics** | http://localhost:8002/metrics |
+| **WebSocket** | `ws://localhost:8002/ws/audio/{id}`, `ws://localhost:8002/ws/transcript/{id}` — см. [docs/WEBSOCKET.md](../docs/WEBSOCKET.md) |
+| **Swagger** | http://localhost:8002/docs |
+| **MinIO Console** | http://localhost:**9013** (minioadmin / minioadmin) |
+| **MinIO S3 API** | http://localhost:**9012** |
+
+Внутри сети compose сервис **api** обращается к MinIO по **`http://minio:9000`** (не путать с пробросом на хост).
+
+**Зависимости старта:** сервис **`migrate`** выполняет Alembic до запуска **api**; **webui** стартует после **healthy** у **api** (healthcheck по `/health`).
+
+Ручная приёмка Phase A: [docs/PHASE_A_ACCEPTANCE.md](../docs/PHASE_A_ACCEPTANCE.md).
+
+## Порт Postgres на хосте
+
+Проброс: **`${POSTGRES_PUBLISH_PORT:-5435}:5432`**. Если ошибка `Bind for 0.0.0.0:5435 failed: port is already allocated`, задайте свободный порт, например `POSTGRES_PUBLISH_PORT=5436` перед `docker compose up`.
+
+Для **Alembic с хоста** в `VT_DATABASE_URL` используйте тот же порт, что и в пробросе (по умолчанию **5435**).
+
+## Порт Redis на хосте
+
+Проброс: **`${REDIS_PUBLISH_PORT:-6382}:6379`**. При ошибке `Bind for 0.0.0.0:6382 failed: port is already allocated` задайте свободный порт, например `REDIS_PUBLISH_PORT=6383`. С хоста для отладки подключайтесь к `localhost:<этот порт>`; внутри compose API/worker используют **`redis:6379`** (`VT_REDIS_URL` менять не нужно).
+
+## Порты MinIO на хосте
+
+Проброс задаётся как **`${MINIO_PUBLISH_PORT:-9012}:9000`** и **`${MINIO_CONSOLE_PUBLISH_PORT:-9013}:9001`**. Если при `compose up` ошибка вроде `Bind for 0.0.0.0:9012 failed: port is already allocated`, задайте свободные порты, например:
+
+```bash
+set MINIO_PUBLISH_PORT=9102
+set MINIO_CONSOLE_PUBLISH_PORT=9103
+docker compose up -d
+```
+
+(PowerShell: `$env:MINIO_PUBLISH_PORT=9102` и т.д.)
 
 ## Configuration
 
@@ -33,29 +81,56 @@ The API and worker use environment variables set in `docker-compose.yml`. You ca
 
 - `VT_DATABASE_URL` – PostgreSQL connection string  
 - `VT_REDIS_URL` – Redis connection string  
+- `VT_CELERY_VISIBILITY_TIMEOUT` – секунды видимости сообщения в Redis для Celery (по умолчанию в compose **14400** = 4 ч); должно быть **больше** максимальной длительности задачи `transcribe_file` при `task_acks_late`, иначе возможна повторная доставка задачи (ТЗ §17)
+- **`VT_MAIN_WORKER_QUEUES`** — список очередей основного **`worker`** (по умолчанию `asr_fast,asr,llm,cleanup`). Если поднимаете **`worker-llm`** (`--profile scale_llm`), задайте например `VT_MAIN_WORKER_QUEUES=asr_fast,asr,cleanup`, чтобы тяжёлый **llm** обрабатывался только выделенным воркером.
+- **`VT_LLM_WORKER_CONCURRENCY`** — concurrency только для **`worker-llm`** (по умолчанию **2**).
 - `VT_S3_ENDPOINT`, `VT_S3_BUCKET`, `VT_S3_ACCESS_KEY`, `VT_S3_SECRET_KEY` – MinIO/S3  
 - `VT_ENVIRONMENT` – e.g. `production`
+- **`VT_JWT_SECRET`** (опционально) — единый секрет подписи JWT для API и воркера. Если не задан, используется **Google OAuth `client_secret`** из `configs/server.yaml` (см. `server/core/security.py`). Задавайте **одинаковое** значение для **api** и **worker**, иначе токены и шифрование объектов в S3 разъедутся.
+- **`VT_ASR_DEFAULT_PROVIDER`** — переопределяет `configs/asr.yaml` → `default_provider` (напр. для **`worker-final-gpu`** по умолчанию **`faster_whisper`**, чтобы CUDA шёл через **CTranslate2**, а не через OpenAI Whisper без нужных `.so` в образе).
+- **`VT_ASR_PARALLEL_CHUNKS`**, **`VT_ASR_CHUNK_SECONDS`**, **`VT_ASR_CHUNK_OVERLAP_SECONDS`** — параллельная нарезка длинных файлов (очередь **`asr_final`**, см. ТЗ §17).
+- **Semantic search (C2):** см. `configs/embeddings.yaml` (монтируется в контейнер как `/app/configs/embeddings.yaml`).
+  - `VT_EMBEDDINGS_ENABLED=1` — включить индексацию и `GET /api/search?mode=semantic`
+  - `VT_EMBEDDINGS_PROVIDER=ollama|openai`, `VT_EMBEDDINGS_MODEL=...`
+  - `VT_OLLAMA_EMBEDDINGS_URL=http://host.docker.internal:11434` (если Ollama на хосте Windows)
+  - `VT_OPENAI_API_KEY` / `OPENAI_API_KEY` — для провайдера openai
 
 The `configs/` directory is mounted read-only into the API and worker. Ensure `configs/server.yaml` exists; Docker env vars override matching values from that file.
+
+Пример `.env` рядом с `docker-compose.yml`:
+
+```env
+# Опционально; без этого JWT берётся из смонтированного server.yaml
+VT_JWT_SECRET=your-long-random-secret
+```
 
 ## First-time setup
 
 ### MinIO bucket
 
-The app expects a bucket named `voice-transcriber`. Create it once via the MinIO console:
-
-1. Open http://localhost:9001 and log in (minioadmin / minioadmin).  
-2. Create a bucket named `voice-transcriber`.
+При старте API/воркер создают бакет **`voice-transcriber`**, если его ещё нет (`head_bucket` / `create_bucket`). Ручное создание в консоли MinIO нужно только если политика прав запрещает автосоздание.
 
 ### Database migrations
 
-If the server uses Alembic, run migrations after Postgres is up:
+При `docker compose up` сервис **`migrate`** (тот же `build`, что и у **`api`**) после готовности Postgres выполняет `python -m alembic upgrade head`. Сервисы **`api`** и **`worker`** ждут успешного завершения миграций (`depends_on: condition: service_completed_successfully`).
+
+Ручной прогон при необходимости:
 
 ```bash
-docker compose run --rm api alembic -c /app/server/alembic.ini upgrade head
+docker compose build api
+docker compose run --rm migrate
+# или: docker compose run --rm api python -m alembic upgrade head
 ```
 
-Adjust the path to `alembic.ini` if your layout differs.
+Используйте **`python -m alembic`**, а не голый `alembic`: в образе зависимости ставятся через `pip install ... --target`, из‑за этого консольный скрипт `alembic` не попадает в `$PATH`, модуль при этом доступен интерпретатору.
+
+**После изменений в `server/` или `configs/`** пересоберите образы **`api`** и **`migrate`** (одинаковый Dockerfile): `docker compose build api migrate`. Иначе в контейнере останется старый код, а с хоста подмонтируется новый `configs/limits.yaml` — возможна ошибка вида `LimitsConfig.__init__() got an unexpected keyword argument 'allowed_realtime_modes'`.
+
+**Если `migrate` падает с `relation "conversations" does not exist`, а в логе первой идёт ревизия `stage0_001` (а не `initial_001`)** — в образе всё ещё старые файлы `alembic/versions/*`. Выполните **`docker compose build --no-cache migrate api`**, затем снова `docker compose run --rm migrate`.
+
+Цепочка миграций включает **`phase_audio_ext_003`** (`conversations.audio_object_ext` для формата загружаемого аудио).
+
+**Миграции с хоста (Windows / вне Docker):** в `configs/server.yaml` указан хост `postgres`, который с хоста не резолвится. Задайте `VT_DATABASE_URL` с адресом localhost и проброшенным портом (по умолчанию **5435**; см. `POSTGRES_PUBLISH_PORT` в compose), затем выполните `alembic upgrade head` из каталога `server/`. Подробнее: [server/README.md](../server/README.md) (раздел Alembic).
 
 ## Building the Web UI for a different API URL
 
@@ -69,11 +144,199 @@ args:
 
 Then rebuild the webui image: `docker compose build webui`.
 
+## Diarization: CPU vs CUDA images
+
+В `docker/Dockerfile.diarization` один Dockerfile собирает **два варианта** образа через build-arg:
+
+| Значение `DIARIZATION_TORCH` | Поведение |
+|------------------------------|-----------|
+| **`cpu`** (по умолчанию) | Ставит зависимости через `poetry install --with diarization` (группа `diarization` опциональна). Torch/torchaudio берутся из версии, закреплённой в группе `diarization`. |
+| **`cuda`** | После `poetry install --with diarization` обновляет `torch/torchaudio` до CUDA wheels с индекса PyTorch (`--index-url https://download.pytorch.org/whl/cu128`). |
+
+В `docker-compose.yml`:
+
+- Сервис **`diarization-worker`** — `args: { DIARIZATION_TORCH: cpu }`, **профиль `diarization`**. Поднимается явно: `docker compose --profile diarization up -d --build diarization-worker`.
+- Сервис **`diarization-worker-gpu`** — `args: { DIARIZATION_TORCH: cuda }`, профиль **`gpu`**. Поднимается явно: `docker compose --profile gpu up -d …`.
+
+**Важно:** оба воркера слушают одну и ту же очередь Celery **`diarization`**. Не запускайте CPU и GPU воркеры одновременно, если не хотите дублировать обработку одной и той же очереди. Обычно в проде активен **ровно один** diarization-сервис.
+
+### Первое развёртывание: какой сервис выбрать
+
+**Только CPU (рекомендуется по умолчанию, dev, машины без NVIDIA в Docker):**
+
+```bash
+cd docker
+docker compose up -d --build
+```
+
+**Включить diarization-worker дополнительно (профиль `diarization`):**
+
+```bash
+cd docker
+docker compose --profile diarization up -d --build diarization-worker
+```
+
+Убедитесь, что **`diarization-worker-gpu` не запущен** (он в профиле `gpu` и сам по себе не стартует без `--profile gpu`).
+
+**GPU / CUDA (Linux или WSL2 с NVIDIA Container Toolkit):**
+
+```bash
+cd docker
+# не поднимайте CPU diarization-worker параллельно с GPU-вариантом
+docker compose stop diarization-worker
+docker compose --profile gpu up -d --build diarization-worker-gpu
+```
+
+В `configs/diarization.yaml` для GPU обычно задают `device: cuda` или `device: auto` (см. комментарии в YAML). Выбор **wheels CPU vs CUDA** — только build-arg / отдельный compose-сервис, не этот файл.
+
+### Diarization: повторный ASR по turn vs только спикеры
+
+- В **`configs/diarization.yaml`** поле **`turn_level_retranscription`**: при **`false`** (дефолт в репозитории) задача diarization **не** вызывает ASR заново на коротких клипах по каждому turn pyannote — только **расстановка спикеров** по уже готовому тексту batch ASR; при **`true`** (и наличии ASR + **ffmpeg** в образе воркера) допускается **turn-level re-ASR** (текст может измениться).
+- Переопределение без правки YAML на старте процесса: переменная окружения **`VT_DIARIZATION_TURN_LEVEL_RETRANSCRIPTION`** (`true` / `false` / `1` / `0` / `yes` / `on` — см. `server/core/config.py`). Задайте её для **api** и **diarization-worker** (и при необходимости **worker**), если хотите единое значение во всём стеке, читающем общий конфиг.
+- Пользовательский override в **Web UI → Settings** (`GET/PATCH /api/settings/user`, поля `diarization_turn_level_retranscription_*`); серверный дефолт для подсказки в форме — **`diarization_turn_level_retranscription_default`** в **`GET /api/settings/limits`**. **Расширение Chromium эти настройки не дублирует.**
+- Повторить **полный batch ASR** по уже загруженному аудио: **`POST /api/conversations/{id}/retranscribe`** или кнопка **Transcribe again** в Web UI (очередь и задача те же, что после **`POST /api/upload`**).
+
+### Как сменить вариант после первого развёртывания
+
+1. **Остановить** текущий diarization-воркер (чтобы не было двух потребителей очереди):
+
+   ```bash
+   docker compose stop diarization-worker
+   # или, если использовали GPU:
+   docker compose --profile gpu stop diarization-worker-gpu
+   ```
+
+2. **Пересобрать** нужный образ (после смены `DIARIZATION_TORCH` или обновления lock):
+
+   ```bash
+   docker compose build diarization-worker
+   # или:
+   docker compose --profile gpu build diarization-worker-gpu
+   ```
+
+3. **Запустить** другой сервис и при необходимости поправить `device` в `configs/diarization.yaml`, затем:
+
+   ```bash
+   docker compose up -d diarization-worker
+   # или с GPU:
+   docker compose --profile gpu up -d diarization-worker-gpu
+   ```
+
+4. При смене **только** `configs/diarization.yaml` достаточно `docker compose restart <имя-сервиса>`.
+
+Переопределение build-arg без правки YAML (например в CI):
+
+```bash
+docker compose build --build-arg DIARIZATION_TORCH=cuda diarization-worker-gpu
+```
+
+(Сервис `diarization-worker-gpu` уже задаёт `cuda` в `docker-compose.yml`; аргумент нужен только если переопределяете образ вручную.)
+
+## Diarization: offline models (pyannote) — прогрев кэша
+
+Если `configs/diarization.yaml` содержит `offline_models: true`, diarization-воркер **не будет скачивать** модели из сети
+(`HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`). В этом режиме модели должны быть заранее доступны в каталоге кэша
+(`model_cache_dir`, по умолчанию `/models`, примонтирован как volume `diarization-models`).
+
+### Быстрый прогрев (один раз) в online-режиме
+
+1) Временно включите online режим:
+
+- `configs/diarization.yaml`: `offline_models: false`
+- Задайте токен: `VT_HF_TOKEN` (HuggingFace) в окружении/`.env` рядом с `docker-compose.yml`
+
+2) Поднимите только diarization-воркер (он скачает модель при первом реальном запуске задачи):
+
+```bash
+docker compose --profile diarization up -d diarization-worker
+```
+
+3) Прогрейте кэш **без разговора** (рекомендуется):
+
+```bash
+docker compose --profile diarization run --rm diarization-worker python -m app.diarization.warmup
+```
+
+Альтернатива: запустить diarization на любом разговоре (через Web UI **Diarize again** или API `POST /api/conversations/{id}/diarize`), либо повторить только ASR (**Transcribe again** / `POST /api/conversations/{id}/retranscribe`).
+
+4) Переключите в offline:
+
+- `configs/diarization.yaml`: `offline_models: true`
+- Можно убрать `VT_HF_TOKEN` (если модели уже локально и доступ не нужен)
+
+5) Перезапустите воркер:
+
+```bash
+docker compose restart diarization-worker
+```
+
+Примечание: если в offline-режиме кэш пустой/неполный, задача diarization завершится ошибкой, а активная версия транскрипта
+не изменится (будет создана новая версия со статусом `failed`).
+
+### Self-check при старте воркера
+
+В образе diarization-воркера предусмотрен опциональный startup self-check (warmup), включаемый переменной:
+
+- `VT_DIARIZATION_WARMUP=1` — перед стартом Celery выполняется `python -m app.diarization.warmup`
+
+Если warmup падает (например offline mode + пустой кэш), воркер не стартует — это удобнее, чем ловить ошибки на первых job’ах.
+
+## Diarization GPU (Linux / WSL2)
+
+GPU-воркер — сервис **`diarization-worker-gpu`** (профиль **`gpu`**), образ собирается с **`DIARIZATION_TORCH=cuda`**. Подробнее и как не смешивать с CPU-воркером: раздел **[Diarization: CPU vs CUDA images](#diarization-cpu-vs-cuda-images)** выше.
+
+Запуск (Linux или WSL2 с настроенным NVIDIA Container Toolkit), после остановки CPU-воркера при необходимости:
+
+```bash
+docker compose stop diarization-worker
+docker compose --profile gpu up -d --build diarization-worker-gpu
+```
+
+Требования:
+
+- Хост Linux: установлен NVIDIA driver + NVIDIA Container Toolkit
+- WSL2: настроена поддержка CUDA в WSL и Docker Desktop/Engine с NVIDIA runtime
+
+Если GPU недоступен, используйте **`diarization-worker`** (CPU wheels) и `device: auto|cpu` в `configs/diarization.yaml`.
+
+### Troubleshooting GPU
+
+Быстрая диагностика:
+
+- **Контейнер видит GPU?**
+
+```bash
+docker compose --profile gpu exec diarization-worker-gpu nvidia-smi
+```
+
+Если `nvidia-smi` не найден или падает — проблема на уровне хоста/контейнерного рантайма (не в приложении).
+
+- **PyTorch видит CUDA?**
+
+```bash
+docker compose --profile gpu exec diarization-worker-gpu python -c "import torch; print(torch.cuda.is_available()); print(torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no cuda')"
+```
+
+Типовые причины, если `torch.cuda.is_available()` возвращает `False`:
+
+- **Не установлен NVIDIA Container Toolkit** (Linux) или не настроен runtime.
+- **WSL2**: отсутствует/не включена CUDA поддержка в WSL, или Docker Desktop не использует NVIDIA runtime.
+- **Драйвер**: слишком старый/несовместимый с используемой версией CUDA/Torch.
+
+Полезная проверка на хосте:
+
+```bash
+nvidia-smi
+```
+
+Если на хосте `nvidia-smi` не работает, контейнер тоже не сможет использовать GPU.
+
 ## Volumes
 
 - `postgres-data` – PostgreSQL data  
 - `redis-data` – Redis data  
 - `minio-data` – MinIO object storage  
+- `diarization-models` – кэш моделей HuggingFace/pyannote (для offline/online режимов)  
 
 Server logs are written to `../server/logs` (mounted from the host).
 
@@ -92,3 +355,107 @@ docker compose down
 # Stop and remove volumes
 docker compose down -v
 ```
+
+## Production (VM + systemd): diarization worker as separate service
+
+Если вы хотите запускать diarization на отдельной VM (или просто как отдельный systemd unit), используйте шаблон:
+
+- `docker/systemd/voice-transcriber-diarization-worker.service`
+- `docker/systemd/voice-transcriber-diarization-worker-gpu.service`
+- `docker/systemd/voice-transcriber-api-worker.service`
+- `docker/systemd/voice-transcriber-stack.service`
+- `docker/systemd/voice-transcriber.env.example`
+
+Рекомендуемая схема:
+
+- **VM A**: `api` + `worker` + `migrate` + инфраструктура (`postgres`, `redis`, `minio`) или подключение к внешним managed-сервисам.
+- **VM B**: только `diarization-worker` (профиль `diarization`), который подключается к тем же `VT_DATABASE_URL`, `VT_REDIS_URL`, `VT_S3_*`.
+
+Альтернатива для VM A:
+
+- Если хотите запускать **весь compose-стек** одним unit (включая `postgres/redis/minio`): используйте `voice-transcriber-stack.service`.
+- Если инфраструктура внешняя (managed Postgres/Redis/S3): используйте `voice-transcriber-api-worker.service` и переопределите `VT_DATABASE_URL`, `VT_REDIS_URL`, `VT_S3_*` через `/etc/voice-transcriber/voice-transcriber.env`.
+
+### Установка unit файла
+
+1) Скопируйте unit:
+
+```bash
+sudo install -m 0644 /opt/voice-transcriber/docker/systemd/voice-transcriber-diarization-worker.service \
+  /etc/systemd/system/voice-transcriber-diarization-worker.service
+```
+
+GPU-вариант (если diarization VM с NVIDIA и вы используете сервис `diarization-worker-gpu`, compose profile `gpu`):
+
+```bash
+sudo install -m 0644 /opt/voice-transcriber/docker/systemd/voice-transcriber-diarization-worker-gpu.service \
+  /etc/systemd/system/voice-transcriber-diarization-worker-gpu.service
+```
+
+Для VM A выберите один из unit’ов:
+
+```bash
+sudo install -m 0644 /opt/voice-transcriber/docker/systemd/voice-transcriber-stack.service \
+  /etc/systemd/system/voice-transcriber-stack.service
+
+# или (только migrate+api+worker+webui):
+sudo install -m 0644 /opt/voice-transcriber/docker/systemd/voice-transcriber-api-worker.service \
+  /etc/systemd/system/voice-transcriber-api-worker.service
+```
+
+2) (Опционально) env overrides:
+
+```bash
+sudo install -d /etc/voice-transcriber
+sudo cp /opt/voice-transcriber/docker/systemd/voice-transcriber.env.example /etc/voice-transcriber/voice-transcriber.env
+sudo nano /etc/voice-transcriber/voice-transcriber.env
+```
+
+3) Включите и запустите:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now voice-transcriber-diarization-worker.service
+```
+
+Для GPU diarization:
+
+```bash
+sudo systemctl enable --now voice-transcriber-diarization-worker-gpu.service
+```
+
+Для VM A:
+
+```bash
+sudo systemctl enable --now voice-transcriber-stack.service
+# или:
+sudo systemctl enable --now voice-transcriber-api-worker.service
+```
+
+4) Логи:
+
+```bash
+journalctl -u voice-transcriber-diarization-worker.service -f
+```
+
+GPU:
+
+```bash
+journalctl -u voice-transcriber-diarization-worker-gpu.service -f
+```
+
+Для VM A:
+
+```bash
+journalctl -u voice-transcriber-stack.service -f
+# или:
+journalctl -u voice-transcriber-api-worker.service -f
+```
+
+### Важно
+
+- Unit использует `docker compose --profile diarization ...`. Убедитесь, что на VM установлен Docker Engine/Compose v2.
+- `WorkingDirectory` в unit сейчас задан как `/opt/voice-transcriber/docker`. Если у вас другой путь — измените его в `.service`.
+- Для online загрузки pyannote моделей задайте `VT_HF_TOKEN` (и убедитесь, что volume `/models` сохраняется/примонтирован как в compose).
+- GPU unit использует `docker compose --profile gpu ...`. Для этого на хосте должны быть NVIDIA драйвер и NVIDIA Container Toolkit, и контейнер должен видеть GPU (см. раздел **Diarization GPU (Linux / WSL2)** выше).
+- В `voice-transcriber-diarization-worker-gpu.service` есть `ExecStartPre=/usr/bin/nvidia-smi` — это **guard**, чтобы сервис падал сразу, если GPU на хосте не настроен.

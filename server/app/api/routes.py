@@ -6,7 +6,7 @@ All API endpoints are registered here.
 
 from fastapi import APIRouter
 
-from . import auth, conversations, search, upload, websocket
+from . import auth, conversations, search, settings, upload
 
 api_router = APIRouter(prefix="/api")
 
@@ -15,5 +15,6 @@ api_router.include_router(auth.router)
 api_router.include_router(conversations.router)
 api_router.include_router(upload.router)
 api_router.include_router(search.router)
-api_router.include_router(websocket.router)
+api_router.include_router(settings.router)
+# WebSocket: префикс /ws монтируется в main.py (не под /api)
 

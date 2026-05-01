@@ -12,6 +12,7 @@ from .security import JWT_ALGORITHM, JWT_SECRET_KEY
 STATE_TTL_MINUTES = 15
 TYP_EXTENSION = "vt_oauth_ext"
 TYP_WEB = "vt_oauth_web"
+TYP_WEB_LINK = "vt_oauth_web_link"
 
 
 def _now() -> datetime:
@@ -72,5 +73,28 @@ def parse_web_oauth_state(token: str) -> dict[str, Any]:
     except JWTError as e:
         raise ValueError("invalid_state") from e
     if payload.get("oauth_typ") != TYP_WEB:
+        raise ValueError("invalid_state_type")
+    return payload
+
+
+def mint_web_link_oauth_state(*, user_id: str, provider: str) -> str:
+    """Bind Web OAuth «link provider» callback to the currently logged-in VT user (C7.4)."""
+    now = _now()
+    payload: dict[str, Any] = {
+        "oauth_typ": TYP_WEB_LINK,
+        "uid": user_id.strip(),
+        "provider": provider.strip().lower(),
+        "iat": now,
+        "exp": now + timedelta(minutes=STATE_TTL_MINUTES),
+    }
+    return jwt.encode(payload, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+
+def parse_web_link_oauth_state(token: str) -> dict[str, Any]:
+    try:
+        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+    except JWTError as e:
+        raise ValueError("invalid_state") from e
+    if payload.get("oauth_typ") != TYP_WEB_LINK:
         raise ValueError("invalid_state_type")
     return payload

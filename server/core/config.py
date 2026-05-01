@@ -16,7 +16,7 @@ import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import yaml
 
@@ -61,6 +61,13 @@ class LimitsConfig:
     max_duration_seconds: int
     max_file_size_bytes: int
     max_ttl_days: int
+    allowed_realtime_modes: Tuple[str, ...]
+    default_realtime_mode: str
+    chunk_ms_min: int
+    chunk_ms_max: int
+    max_window_ms: int
+    autoprolong_enabled: bool
+    autoprolong_tail_seconds: float
 
 
 @dataclass
@@ -68,6 +75,7 @@ class ASRProviderConfig:
     enabled: bool
     model: str | None = None
     impl: str | None = None  # dotted path to implementation, optional
+    model_path: str | None = None  # каталог модели (напр. Vosk), см. configs/asr.yaml
 
 
 @dataclass
@@ -79,8 +87,36 @@ class LLMProviderConfig:
 
 
 @dataclass
+class DiarizationProviderConfig:
+    enabled: bool
+    impl: str | None = None  # dotted path to implementation, optional
+    model: str | None = None
+    device: str | None = None  # cpu|cuda|auto
+    hf_token_env: str | None = None
+    offline_models: bool = False
+    model_cache_dir: str | None = None
+    num_speakers: int | None = None
+    min_speakers: int | None = None
+    max_speakers: int | None = None
+
+
+@dataclass
+class DiarizationConfig:
+    enabled: bool
+    default_provider: str | None
+    providers: Dict[str, DiarizationProviderConfig]
+    # True: re-ASR each diarization turn clip; False: keep ASR wording, assign speakers by overlap.
+    turn_level_retranscription: bool = False
+
+
+@dataclass
 class ASRConfig:
     default_provider: str
+    """Имя провайдера из `providers` (whisper / faster_whisper / vosk / …)."""
+
+    recognition_model: str | None
+    """Текущая используемая модель для `default_provider` (перекрывает model у записи провайдера)."""
+
     providers: Dict[str, ASRProviderConfig]
 
 
@@ -88,6 +124,23 @@ class ASRConfig:
 class LLMConfig:
     default_provider: str
     providers: Dict[str, LLMProviderConfig]
+    # ТЗ §7.6: один rolling-summary на всю цепочку (recording_session_id).
+    session_summary_enabled: bool = False
+    session_summary_max_input_chars: int = 120_000
+
+
+@dataclass
+class EmbeddingsConfig:
+    """Semantic search indexing (configs/embeddings.yaml)."""
+
+    enabled: bool
+    provider: str
+    model: str
+    base_url: str | None
+    openai_base_url: str | None
+    openai_api_key: str | None
+    timeout_seconds: float
+    max_input_chars: int
 
 
 @dataclass
@@ -101,12 +154,39 @@ class ServerConfig:
     auth: AuthConfig
     limits: LimitsConfig
     asr: ASRConfig
+    diarization: DiarizationConfig
     llm: LLMConfig
+    embeddings: EmbeddingsConfig
 
 
 def _load_yaml(path: Path) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
+
+
+def _limits_config_from_yaml(limits_data: Dict[str, Any]) -> LimitsConfig:
+    """Merge YAML with defaults so older configs without realtime/autoprolong keys still load."""
+    modes = limits_data.get("allowed_realtime_modes") or ["chunk", "windowed"]
+    if isinstance(modes, list):
+        modes = tuple(str(m) for m in modes)
+    else:
+        modes = ("chunk", "windowed")
+    return LimitsConfig(
+        max_duration_seconds=int(limits_data.get("max_duration_seconds", 7200)),
+        max_file_size_bytes=int(limits_data.get("max_file_size_bytes", 524_288_000)),
+        max_ttl_days=int(limits_data.get("max_ttl_days", 30)),
+        allowed_realtime_modes=modes,
+        default_realtime_mode=str(
+            limits_data.get("default_realtime_mode", "chunk")
+        ).lower(),
+        chunk_ms_min=int(limits_data.get("chunk_ms_min", 500)),
+        chunk_ms_max=int(limits_data.get("chunk_ms_max", 2000)),
+        max_window_ms=int(limits_data.get("max_window_ms", 20_000)),
+        autoprolong_enabled=bool(limits_data.get("autoprolong_enabled", False)),
+        autoprolong_tail_seconds=float(
+            limits_data.get("autoprolong_tail_seconds", 3.0)
+        ),
+    )
 
 
 def _apply_env_overrides(server_data: Dict[str, Any]) -> None:
@@ -142,13 +222,140 @@ def _apply_env_overrides(server_data: Dict[str, Any]) -> None:
     server_data["auth"] = auth
 
 
+def _asr_provider_config_from_dict(cfg: Dict[str, Any]) -> ASRProviderConfig:
+    if not isinstance(cfg, dict):
+        cfg = {}
+    return ASRProviderConfig(
+        enabled=bool(cfg.get("enabled", False)),
+        model=cfg.get("model"),
+        impl=cfg.get("impl"),
+        model_path=cfg.get("model_path"),
+    )
+
+
+def _diarization_provider_config_from_dict(cfg: Dict[str, Any]) -> DiarizationProviderConfig:
+    if not isinstance(cfg, dict):
+        cfg = {}
+    def _int_or_none(v: Any) -> int | None:
+        if v is None:
+            return None
+        try:
+            return int(v)
+        except Exception:
+            return None
+
+    return DiarizationProviderConfig(
+        enabled=bool(cfg.get("enabled", False)),
+        impl=cfg.get("impl"),
+        model=cfg.get("model"),
+        device=cfg.get("device"),
+        hf_token_env=cfg.get("hf_token_env"),
+        offline_models=bool(cfg.get("offline_models", False)),
+        model_cache_dir=cfg.get("model_cache_dir"),
+        num_speakers=_int_or_none(cfg.get("num_speakers")),
+        min_speakers=_int_or_none(cfg.get("min_speakers")),
+        max_speakers=_int_or_none(cfg.get("max_speakers")),
+    )
+
+
+def _apply_diarization_env_overrides(diarization_data: Dict[str, Any]) -> None:
+    v = os.environ.get("VT_DIARIZATION_TURN_LEVEL_RETRANSCRIPTION")
+    if v is None or not str(v).strip():
+        return
+    diarization_data["turn_level_retranscription"] = str(v).strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _apply_asr_env_overrides(asr_data: Dict[str, Any]) -> None:
+    """Переопределения для configs/asr.yaml (модель и т.д.)."""
+    if os.environ.get("VT_ASR_DEFAULT_PROVIDER"):
+        asr_data["default_provider"] = os.environ["VT_ASR_DEFAULT_PROVIDER"].strip()
+    if os.environ.get("VT_ASR_MODEL"):
+        asr_data["recognition_model"] = os.environ["VT_ASR_MODEL"].strip()
+
+
+def _embeddings_config_from_yaml(embeddings_data: Dict[str, Any]) -> EmbeddingsConfig:
+    data = embeddings_data or {}
+    openai_key = str(data.get("openai_api_key") or "").strip()
+    if not openai_key:
+        openai_key = (
+            os.environ.get("VT_OPENAI_API_KEY", "").strip()
+            or os.environ.get("OPENAI_API_KEY", "").strip()
+        )
+    return EmbeddingsConfig(
+        enabled=bool(data.get("enabled", False)),
+        provider=str(data.get("provider", "ollama") or "ollama").strip().lower(),
+        model=str(data.get("model", "nomic-embed-text") or "nomic-embed-text").strip(),
+        base_url=(
+            str(data.get("base_url")).strip()
+            if data.get("base_url")
+            else None
+        ),
+        openai_base_url=(
+            str(data.get("openai_base_url")).strip()
+            if data.get("openai_base_url")
+            else None
+        ),
+        openai_api_key=openai_key or None,
+        timeout_seconds=float(data.get("timeout_seconds", 120)),
+        max_input_chars=int(data.get("max_input_chars", 16_000)),
+    )
+
+
+def _apply_llm_env_overrides(llm_data: Dict[str, Any]) -> None:
+    v = os.environ.get("VT_LLM_SESSION_SUMMARY_ENABLED", "").strip().lower()
+    if v in ("1", "true", "yes"):
+        llm_data["session_summary_enabled"] = True
+    elif v in ("0", "false", "no"):
+        llm_data["session_summary_enabled"] = False
+    mc = os.environ.get("VT_LLM_SESSION_SUMMARY_MAX_INPUT_CHARS", "").strip()
+    if mc.isdigit():
+        llm_data["session_summary_max_input_chars"] = int(mc)
+    # Docker/workers: localhost in llm.yaml points at the container itself; set e.g.
+    # VT_OLLAMA_BASE_URL=http://host.docker.internal:11434 (Desktop) or http://ollama:11434.
+    ollama_url = os.environ.get("VT_OLLAMA_BASE_URL", "").strip()
+    ollama_model = os.environ.get("VT_OLLAMA_MODEL", "").strip()
+    providers = llm_data.get("providers")
+    if isinstance(providers, dict):
+        om = providers.get("ollama")
+        if isinstance(om, dict):
+            if ollama_url:
+                om["base_url"] = ollama_url
+            if ollama_model:
+                om["model"] = ollama_model
+
+
+def _apply_embeddings_env_overrides(embeddings_data: Dict[str, Any]) -> None:
+    v = os.environ.get("VT_EMBEDDINGS_ENABLED", "").strip().lower()
+    if v in ("1", "true", "yes", "on"):
+        embeddings_data["enabled"] = True
+    elif v in ("0", "false", "no", "off"):
+        embeddings_data["enabled"] = False
+    if os.environ.get("VT_EMBEDDINGS_PROVIDER"):
+        embeddings_data["provider"] = os.environ["VT_EMBEDDINGS_PROVIDER"].strip()
+    if os.environ.get("VT_EMBEDDINGS_MODEL"):
+        embeddings_data["model"] = os.environ["VT_EMBEDDINGS_MODEL"].strip()
+    if os.environ.get("VT_OLLAMA_EMBEDDINGS_URL"):
+        embeddings_data["base_url"] = os.environ["VT_OLLAMA_EMBEDDINGS_URL"].strip()
+
+
 @lru_cache(maxsize=1)
 def load_app_config() -> ServerConfig:
     server_data = _load_yaml(CONFIG_DIR / "server.yaml")
     _apply_env_overrides(server_data)
 
     asr_data = _load_yaml(CONFIG_DIR / "asr.yaml")
+    _apply_asr_env_overrides(asr_data)
+    diarization_data = _load_yaml(CONFIG_DIR / "diarization.yaml")
+    _apply_diarization_env_overrides(diarization_data)
     llm_data = _load_yaml(CONFIG_DIR / "llm.yaml")
+    _apply_llm_env_overrides(llm_data)
+    embeddings_data = _load_yaml(CONFIG_DIR / "embeddings.yaml")
+    _apply_embeddings_env_overrides(embeddings_data)
     limits_data = _load_yaml(CONFIG_DIR / "limits.yaml")
 
     db_cfg = DatabaseConfig(**server_data["database"])
@@ -169,24 +376,55 @@ def load_app_config() -> ServerConfig:
         yandex=_oauth_from_yaml(server_data["auth"]["yandex"]),
     )
 
-    limits_cfg = LimitsConfig(**limits_data)
+    limits_cfg = _limits_config_from_yaml(limits_data)
 
     asr_providers = {
-        name: ASRProviderConfig(**cfg)
-        for name, cfg in asr_data.get("providers", {}).items()
+        name: _asr_provider_config_from_dict(cfg)
+        for name, cfg in (asr_data.get("providers") or {}).items()
     }
+    rec_model = asr_data.get("recognition_model")
+    if rec_model is not None and not isinstance(rec_model, str):
+        rec_model = str(rec_model)
     asr_cfg = ASRConfig(
-        default_provider=asr_data.get("default_provider", ""),
+        default_provider=str(asr_data.get("default_provider", "") or "").strip(),
+        recognition_model=(rec_model.strip() if rec_model else None),
         providers=asr_providers,
     )
 
-    llm_providers = {
-        name: LLMProviderConfig(**cfg)
-        for name, cfg in llm_data.get("providers", {}).items()
-    }
+    llm_providers: Dict[str, LLMProviderConfig] = {}
+    for name, raw in (llm_data.get("providers") or {}).items():
+        if not isinstance(raw, dict):
+            continue
+        llm_providers[name] = LLMProviderConfig(
+            enabled=bool(raw.get("enabled", False)),
+            base_url=raw.get("base_url"),
+            model=raw.get("model"),
+            api_key=raw.get("api_key"),
+        )
     llm_cfg = LLMConfig(
         default_provider=llm_data.get("default_provider", ""),
         providers=llm_providers,
+        session_summary_enabled=bool(llm_data.get("session_summary_enabled", False)),
+        session_summary_max_input_chars=int(
+            llm_data.get("session_summary_max_input_chars", 120_000) or 120_000
+        ),
+    )
+
+    embeddings_cfg = _embeddings_config_from_yaml(embeddings_data)
+
+    diarization_providers = {
+        name: _diarization_provider_config_from_dict(cfg)
+        for name, cfg in (diarization_data.get("providers") or {}).items()
+    }
+    diarization_cfg = DiarizationConfig(
+        enabled=bool(diarization_data.get("enabled", False)),
+        default_provider=(
+            str(diarization_data.get("default_provider", "") or "").strip() or None
+        ),
+        providers=diarization_providers,
+        turn_level_retranscription=bool(
+            diarization_data.get("turn_level_retranscription", False)
+        ),
     )
 
     return ServerConfig(
@@ -199,7 +437,9 @@ def load_app_config() -> ServerConfig:
         auth=auth_cfg,
         limits=limits_cfg,
         asr=asr_cfg,
+        diarization=diarization_cfg,
         llm=llm_cfg,
+        embeddings=embeddings_cfg,
     )
 
 

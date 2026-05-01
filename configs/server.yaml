@@ -4,6 +4,8 @@ environment: development
 host: 0.0.0.0
 port: 8000
 
+# Хост `postgres` — только внутри docker-compose. На хосте для Alembic задайте VT_DATABASE_URL
+# (см. server/README.md). Порт на хост задаётся в docker-compose (POSTGRES_PUBLISH_PORT, по умолчанию 5435).
 database:
   url: postgresql+psycopg2://voice:voice@postgres/voice
 

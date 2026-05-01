@@ -6,14 +6,25 @@ export type RecorderState = "idle" | "recording";
 export interface RecorderConfig {
   settings: ExtensionSettings;
   conversationId: string;
+  /** First sync hook when stop begins (before MediaRecorder.stop / upload). */
+  onBeforeStop?: () => void;
+  /** Called after a successful transition to idle (upload + cleanup), e.g. tab capture tab closed. */
+  onAfterStop?: () => void;
 }
 
 export class AudioRecorderController {
   private mediaStream: MediaStream | null = null;
   private mediaRecorder: MediaRecorder | null = null;
   private wsClient: AudioWebSocketClient | null = null;
+  private monitorAudioContext: AudioContext | null = null;
+  private monitorSourceNode: MediaStreamAudioSourceNode | null = null;
+  private recordedParts: BlobPart[] = [];
+  private recordMimeType: string = "audio/webm";
   private state: RecorderState = "idle";
   private config: RecorderConfig | null = null;
+  private tabTrackEndedHandler: (() => void) | null = null;
+  /** Tab + mic streams mixed via AudioContext (stopped explicitly on cleanup). */
+  private dualSourceStreams: MediaStream[] | null = null;
 
   getState(): RecorderState {
     return this.state;
@@ -22,16 +33,63 @@ export class AudioRecorderController {
   async start(config: RecorderConfig): Promise<void> {
     if (this.state === "recording") return;
     this.config = config;
+    this.recordedParts = [];
+    this.dualSourceStreams = null;
 
     this.mediaStream = await this.getStream(config.settings.audioSource);
     if (!this.mediaStream) throw new Error("Unable to acquire audio stream");
 
+    const attachTabEnded = (tabStream: MediaStream) => {
+      this.tabTrackEndedHandler = () => {
+        if (this.state === "recording") {
+          void this.stop();
+        }
+      };
+      for (const track of tabStream.getAudioTracks()) {
+        track.addEventListener("ended", this.tabTrackEndedHandler!);
+      }
+    };
+
+    if (config.settings.audioSource === "tab") {
+      attachTabEnded(this.mediaStream);
+    } else if (config.settings.audioSource === "dual" && this.dualSourceStreams?.[0]) {
+      attachTabEnded(this.dualSourceStreams[0]);
+    }
+
+    // Tab capture often stops audible playback in the tab unless we locally monitor the stream.
+    if (config.settings.audioSource === "tab") {
+      try {
+        const ctx = new AudioContext();
+        const src = ctx.createMediaStreamSource(this.mediaStream);
+        src.connect(ctx.destination);
+        this.monitorAudioContext = ctx;
+        this.monitorSourceNode = src;
+        if (ctx.state === "suspended") {
+          await ctx.resume();
+        }
+      } catch {
+        // Monitoring is best-effort; recording can still proceed.
+      }
+    }
+
     this.wsClient = new AudioWebSocketClient(config.settings, config.conversationId);
     this.wsClient.connect();
+    try {
+      await this.wsClient.waitUntilOpen();
+    } catch (e) {
+      this.wsClient.close();
+      this.wsClient = null;
+      throw e;
+    }
 
     const options: MediaRecorderOptions = {
       mimeType: "audio/webm;codecs=opus",
     };
+    if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+      // Fall back to browser default; server upload resolver can still treat it as webm via audio_format query.
+      delete (options as { mimeType?: string }).mimeType;
+    }
+    this.recordMimeType = options.mimeType ?? "audio/webm";
     this.mediaRecorder = new MediaRecorder(this.mediaStream, options);
 
     const timeslice = Math.min(
@@ -41,6 +99,7 @@ export class AudioRecorderController {
 
     this.mediaRecorder.ondataavailable = (event) => {
       if (event.data && event.data.size > 0 && this.wsClient) {
+        this.recordedParts.push(event.data);
         this.wsClient.sendChunk(event.data);
       }
     };
@@ -49,29 +108,150 @@ export class AudioRecorderController {
     this.state = "recording";
   }
 
-  stop(): void {
-    if (this.mediaRecorder && this.state === "recording") {
-      this.mediaRecorder.stop();
-    }
-    if (this.mediaStream) {
-      this.mediaStream.getTracks().forEach((t) => t.stop());
-    }
+  async stop(): Promise<void> {
+    if (this.state !== "recording") return;
+
+    const cfg = this.config;
+    cfg?.onBeforeStop?.();
+    const afterStop = cfg?.onAfterStop;
+    const ws = this.wsClient;
+    const recorder = this.mediaRecorder;
+    const stream = this.mediaStream;
+
+    await new Promise<void>((resolve) => {
+      if (!recorder) return resolve();
+      recorder.addEventListener(
+        "stop",
+        () => {
+          resolve();
+        },
+        { once: true }
+      );
+      try {
+        recorder.stop();
+      } catch {
+        resolve();
+      }
+    });
+
     this.mediaRecorder = null;
+
+    if (stream) {
+      if (this.tabTrackEndedHandler) {
+        const tabLike =
+          this.dualSourceStreams?.[0] ??
+          (this.config?.settings.audioSource === "tab" ? stream : null);
+        if (tabLike) {
+          for (const track of tabLike.getAudioTracks()) {
+            track.removeEventListener("ended", this.tabTrackEndedHandler);
+          }
+        }
+        this.tabTrackEndedHandler = null;
+      }
+      stream.getTracks().forEach((t) => t.stop());
+    }
     this.mediaStream = null;
 
-    if (this.wsClient) {
-      this.wsClient.close();
-      this.wsClient = null;
+    if (this.dualSourceStreams) {
+      for (const s of this.dualSourceStreams) {
+        s.getTracks().forEach((t) => t.stop());
+      }
+      this.dualSourceStreams = null;
     }
 
+    try {
+      this.monitorSourceNode?.disconnect();
+    } catch {
+      // ignore
+    }
+    this.monitorSourceNode = null;
+    try {
+      await this.monitorAudioContext?.close();
+    } catch {
+      // ignore
+    }
+    this.monitorAudioContext = null;
+
+    if (ws) {
+      ws.close();
+    }
+    this.wsClient = null;
+
     this.state = "idle";
+
+    // Persist a single audio object for the conversation (WebUI download / worker ASR pipeline).
+    if (cfg && this.recordedParts.length > 0) {
+      const blob = new Blob(this.recordedParts, { type: this.recordMimeType });
+      await this.uploadRecordingBlob(cfg, blob);
+    }
+
+    this.recordedParts = [];
+    this.config = null;
+
+    afterStop?.();
+  }
+
+  private async uploadRecordingBlob(config: RecorderConfig, blob: Blob): Promise<void> {
+    const url = new URL(`${config.settings.serverUrl.replace(/\/+$/, "")}/api/upload`);
+    url.searchParams.set("conversation_id", config.conversationId);
+    url.searchParams.set("audio_format", "webm");
+
+    const form = new FormData();
+    form.append("file", blob, "recording.webm");
+
+    const headers: Record<string, string> | undefined = config.settings.accessToken
+      ? { Authorization: `Bearer ${config.settings.accessToken}` }
+      : undefined;
+
+    const res = await fetch(url.toString(), { method: "POST", headers, body: form });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`Upload failed: ${res.status} ${text}`);
+    }
   }
 
   private async getStream(source: AudioSource): Promise<MediaStream> {
+    if (source === "dual") {
+      const tabStream = await this.getStream("tab");
+      const micStream = await this.getStream("microphone");
+      this.dualSourceStreams = [tabStream, micStream];
+      const ctx = new AudioContext();
+      const dest = ctx.createMediaStreamDestination();
+      const tabSrc = ctx.createMediaStreamSource(tabStream);
+      const micSrc = ctx.createMediaStreamSource(micStream);
+      tabSrc.connect(dest);
+      micSrc.connect(dest);
+      try {
+        tabSrc.connect(ctx.destination);
+      } catch {
+        // Monitoring is best-effort.
+      }
+      this.monitorAudioContext = ctx;
+      this.monitorSourceNode = tabSrc;
+      if (ctx.state === "suspended") {
+        await ctx.resume();
+      }
+      return dest.stream;
+    }
+
     if (source === "microphone") {
-      return navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true },
-      });
+      try {
+        return await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true },
+        });
+      } catch (e) {
+        const name = e && typeof e === "object" && "name" in e ? String((e as { name?: unknown }).name) : "";
+        const msg = e instanceof Error ? e.message : String(e);
+        if (name === "NotAllowedError" || /Permission dismissed/i.test(msg)) {
+          throw new Error(
+            "Microphone permission was denied/dismissed. Click Start Recording again and allow microphone access for the extension popup. " +
+              "If Chrome does not show a prompt, open chrome://settings/content/siteDetails?site=chrome-extension://" +
+              chrome.runtime.id +
+              " and set Microphone to Allow."
+          );
+        }
+        throw new Error(`Microphone error: ${msg}`);
+      }
     }
 
     // Tab / system audio require additional permissions and APIs.
@@ -84,8 +264,16 @@ export class AudioRecorderController {
           return;
         }
         chrome.tabCapture.capture({ audio: true, video: false }, (stream) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message ?? "tabCapture failed"));
+            return;
+          }
           if (!stream) {
-            reject(new Error("Failed to capture tab audio"));
+            reject(
+              new Error(
+                "Failed to capture tab audio (often: permission dismissed, or the active tab has no capturable audio). Try again on a normal webpage tab with audio playing, or switch Audio source to Microphone."
+              )
+            );
           } else {
             resolve(stream);
           }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createPkcePair, parseOAuthRedirect } from "./oauth";
+import { createPkcePair, parseOAuthRedirect, parseServiceTokensFromOAuthRedirect } from "./oauth";
 
 describe("parseOAuthRedirect", () => {
   it("reads code and state from query", () => {
@@ -35,5 +35,25 @@ describe("createPkcePair", () => {
     expect(verifier.length).toBeGreaterThanOrEqual(43);
     expect(verifier.length).toBeLessThanOrEqual(128);
     expect(challenge.length).toBeGreaterThanOrEqual(43);
+  });
+});
+
+describe("parseServiceTokensFromOAuthRedirect", () => {
+  it("reads tokens from URL fragment", () => {
+    const r = parseServiceTokensFromOAuthRedirect(
+      "https://abc.chromiumapp.org/oauth2#access_token=aa.bb.cc&refresh_token=secret"
+    );
+    expect(r.accessToken).toBe("aa.bb.cc");
+    expect(r.refreshToken).toBe("secret");
+    expect(r.error).toBeNull();
+  });
+
+  it("reads OAuth errors from fragment", () => {
+    const r = parseServiceTokensFromOAuthRedirect(
+      "https://abc.chromiumapp.org/oauth2#error=access_denied&error_description=no"
+    );
+    expect(r.accessToken).toBeNull();
+    expect(r.error).toBe("access_denied");
+    expect(r.errorDescription).toBe("no");
   });
 });

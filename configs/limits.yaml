@@ -1,6 +1,19 @@
-# Limits configuration (skeleton)
+# Limits configuration (см. ТЗ §5, дорожная карта Этап 0)
 
 max_duration_seconds: 7200       # 2h
 max_file_size_bytes: 524288000   # 500MB
 max_ttl_days: 30
+
+# Realtime (гибрид: сервер задаёт границы и дефолт)
+allowed_realtime_modes:
+  - chunk
+  - windowed
+default_realtime_mode: chunk
+chunk_ms_min: 500
+chunk_ms_max: 2000
+max_window_ms: 20000
+
+# Автопродление (ТЗ §7): хвост догружается в A перед стартом B
+autoprolong_enabled: false
+autoprolong_tail_seconds: 3
 

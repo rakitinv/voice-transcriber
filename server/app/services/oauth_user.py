@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from uuid import uuid4
 
 from fastapi import HTTPException, status
@@ -87,6 +88,92 @@ def upsert_user_from_oauth_profile(db: Session, *, provider: str, profile: OAuth
     )
     db.add(user)
     db.add(oid)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def link_oauth_identity_to_user(
+    db: Session,
+    *,
+    target_user_id: uuid.UUID,
+    provider: str,
+    profile: OAuthProfile,
+) -> User:
+    """
+    Attach `(provider, sub)` to an **existing** VT user after OAuth proof (Web UI only, C7.4).
+
+    - Identity already on this user → refresh snapshot fields.
+    - Identity on another user → **409**
+    - Provider profile email already used as `users.email` by another user → **409**
+    """
+    subject = profile.subject.strip()
+    if not subject:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="OAuth profile missing subject")
+
+    email = profile.email.strip()
+    if not email:
+        email = f"{provider}.{subject}@oauth.placeholder.local"
+
+    display = profile.display_name
+    if display is not None:
+        display = display.strip() or None
+
+    identity = (
+        db.query(UserOAuthIdentity)
+        .filter(
+            UserOAuthIdentity.provider == provider,
+            UserOAuthIdentity.provider_subject == subject,
+        )
+        .first()
+    )
+
+    user = db.query(User).filter(User.id == target_user_id).first()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    other_email = (
+        db.query(User).filter(User.email == email).filter(User.id != target_user_id).first()
+    )
+    if other_email is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="provider_email_conflict",
+        )
+
+    if identity:
+        if identity.user_id != target_user_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="provider_already_linked_elsewhere",
+            )
+        changed = False
+        if user.auth_provider != provider:
+            user.auth_provider = provider
+            changed = True
+        if identity.provider_email != email:
+            identity.provider_email = email
+            changed = True
+        if display and user.display_name != display:
+            user.display_name = display
+            changed = True
+        if changed:
+            db.commit()
+            db.refresh(user)
+            db.refresh(identity)
+        return user
+
+    oid = UserOAuthIdentity(
+        id=uuid4(),
+        user_id=user.id,
+        provider=provider,
+        provider_subject=subject,
+        provider_email=email,
+    )
+    db.add(oid)
+    user.auth_provider = provider
+    if display and not (user.display_name or "").strip():
+        user.display_name = display
     db.commit()
     db.refresh(user)
     return user

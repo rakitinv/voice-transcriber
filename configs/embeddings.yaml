@@ -1,0 +1,12 @@
+# Semantic search (Phase C2): embeddings for GET /api/search?mode=semantic
+# When disabled (default), Celery skips indexing and semantic search returns empty.
+
+enabled: false
+provider: ollama
+model: nomic-embed-text
+base_url: http://127.0.0.1:11434
+timeout_seconds: 120
+max_input_chars: 16000
+
+# provider: openai — set api_key or env VT_OPENAI_API_KEY / OPENAI_API_KEY
+openai_base_url: https://api.openai.com/v1

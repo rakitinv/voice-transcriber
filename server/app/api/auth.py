@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 from typing import Annotated
 from urllib.parse import parse_qs, quote, urlencode
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
@@ -16,11 +17,19 @@ from core.config import app_config
 from core.db import get_db
 from core.logging import logger
 from core.oauth_public import oauth_public_api_origin
-from core.oauth_state import mint_extension_oauth_state, mint_web_oauth_state, parse_extension_oauth_state, parse_web_oauth_state
+from core.oauth_state import (
+    mint_extension_oauth_state,
+    mint_web_link_oauth_state,
+    mint_web_oauth_state,
+    parse_extension_oauth_state,
+    parse_web_link_oauth_state,
+    parse_web_oauth_state,
+)
 from core.security import create_access_token
 from ..models import User
 from ..services.oauth_exchange import OAuthExchangeError, exchange_google_authorization_code, exchange_yandex_authorization_code
-from ..services.oauth_user import upsert_user_from_oauth_profile
+from ..services.oauth_user import link_oauth_identity_to_user, upsert_user_from_oauth_profile
+from ..services.service_refresh_token import issue_refresh_token, rotate_refresh_token
 from .dependencies import get_current_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -32,7 +41,17 @@ class ExtensionAuthUrlResponse(BaseModel):
 
 class ExtensionFinalizeResponse(BaseModel):
     access_token: str
+    refresh_token: str
     user: dict
+
+
+class AuthRefreshRequest(BaseModel):
+    refresh_token: str
+
+
+class AuthRefreshResponse(BaseModel):
+    access_token: str
+    refresh_token: str
 
 
 def _is_allowed_extension_redirect(url: str) -> bool:
@@ -46,16 +65,79 @@ def _web_oauth_callback_uri(provider: str) -> str:
     return f"{oauth_public_api_origin()}/api/auth/{provider}/callback"
 
 
-def _oauth_redirect_to_webui(access_token: str) -> RedirectResponse:
-    """Send the browser back to the SPA with the JWT in the URL fragment."""
+def _web_link_callback_uri(provider: str) -> str:
+    return f"{oauth_public_api_origin()}/api/auth/{provider}/link/callback"
+
+
+def _google_web_login_authorize_url(
+    *,
+    client: str | None,
+    next_url: str | None,
+    prompt: str | None,
+) -> str:
+    """Same authorize URL as Web UI GET /google (redirect_uri = server /callback)."""
+    cb = _web_oauth_callback_uri("google")
+    state = mint_web_oauth_state(provider="google", client=client, next_url=next_url)
+    params = {
+        "client_id": app_config.auth.google.client_id,
+        "redirect_uri": cb,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "access_type": "online",
+    }
+    if prompt:
+        params["prompt"] = prompt
+    return "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params, quote_via=quote)
+
+
+def _yandex_web_login_authorize_url(
+    *,
+    client: str | None,
+    next_url: str | None,
+    force_confirm: bool,
+) -> str:
+    """Same authorize URL shape as Web UI GET /yandex (redirect_uri = server /callback)."""
+    cb = _web_oauth_callback_uri("yandex")
+    state = mint_web_oauth_state(provider="yandex", client=client, next_url=next_url)
+    params = {
+        "client_id": app_config.auth.yandex.client_id,
+        "redirect_uri": cb,
+        "response_type": "code",
+        "state": state,
+    }
+    if force_confirm:
+        params["force_confirm"] = "yes"
+    return "https://oauth.yandex.ru/authorize?" + urlencode(params, quote_via=quote)
+
+
+def _redirect_web_settings_after_link(
+    *,
+    success: bool,
+    provider: str | None = None,
+    reason: str | None = None,
+) -> RedirectResponse:
     webui = os.environ.get("VT_WEBUI_ORIGIN", "http://localhost:3002").strip().rstrip("/")
+    if success:
+        q = urlencode({"oauth_link": "success", "provider": provider or ""})
+        return RedirectResponse(url=f"{webui}/settings?{q}", status_code=status.HTTP_302_FOUND)
+    q = urlencode({"oauth_link": "error", "reason": reason or "unknown"})
+    return RedirectResponse(url=f"{webui}/settings?{q}", status_code=status.HTTP_302_FOUND)
+
+
+def _oauth_redirect_to_webui(access_token: str, refresh_token: str) -> RedirectResponse:
+    """Send the browser back to the SPA with access + refresh tokens in the URL fragment (C7.2)."""
+    webui = os.environ.get("VT_WEBUI_ORIGIN", "http://localhost:3002").strip().rstrip("/")
+    frag = (
+        f"access_token={quote(access_token, safe='')}&refresh_token={quote(refresh_token, safe='')}"
+    )
     return RedirectResponse(
-        url=f"{webui}/login#access_token={quote(access_token, safe='')}",
+        url=f"{webui}/login#{frag}",
         status_code=status.HTTP_302_FOUND,
     )
 
 
-def _oauth_redirect_to_extension(access_token: str, next_url: str) -> RedirectResponse:
+def _oauth_redirect_to_extension(access_token: str, refresh_token: str, next_url: str) -> RedirectResponse:
     """
     Send the browser back to the browser-extension web auth flow.
 
@@ -66,11 +148,14 @@ def _oauth_redirect_to_extension(access_token: str, next_url: str) -> RedirectRe
 
     u = urlparse((next_url or "").strip())
     if not (u.scheme == "https" and u.netloc.endswith(".chromiumapp.org")):
-        return _oauth_redirect_to_webui(access_token)
+        return _oauth_redirect_to_webui(access_token, refresh_token)
 
     sep = "&" if ("#" in next_url) else "#"
+    frag = (
+        f"access_token={quote(access_token, safe='')}&refresh_token={quote(refresh_token, safe='')}"
+    )
     return RedirectResponse(
-        url=f"{next_url}{sep}access_token={quote(access_token, safe='')}",
+        url=f"{next_url}{sep}{frag}",
         status_code=status.HTTP_302_FOUND,
     )
 
@@ -127,9 +212,10 @@ async def _issue_redirect_after_web_oauth(
 
     user = upsert_user_from_oauth_profile(db, provider=provider, profile=profile)
     access_token = create_access_token(data={"sub": str(user.id)})
+    refresh_plain = issue_refresh_token(db, user_id=user.id)
     if (client or "").strip().lower() == "extension" and next_url:
-        return _oauth_redirect_to_extension(access_token, next_url)
-    return _oauth_redirect_to_webui(access_token)
+        return _oauth_redirect_to_extension(access_token, refresh_plain, next_url)
+    return _oauth_redirect_to_webui(access_token, refresh_plain)
 
 
 async def _finalize_extension_json(
@@ -155,8 +241,10 @@ async def _finalize_extension_json(
 
     user = upsert_user_from_oauth_profile(db, provider=provider, profile=profile)
     access_token = create_access_token(data={"sub": str(user.id)})
+    refresh_plain = issue_refresh_token(db, user_id=user.id)
     return ExtensionFinalizeResponse(
         access_token=access_token,
+        refresh_token=refresh_plain,
         user={
             "id": str(user.id),
             "email": user.email,
@@ -217,6 +305,23 @@ def _build_yandex_extension_authorize_url(
     return f"https://oauth.yandex.ru/authorize?{q}"
 
 
+@router.post("/refresh", response_model=AuthRefreshResponse)
+async def auth_refresh(db: Annotated[Session, Depends(get_db)], body: AuthRefreshRequest):
+    """Mint a new access JWT and rotated refresh token (C7.2)."""
+    raw = body.refresh_token.strip()
+    if not raw:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing refresh_token")
+    try:
+        user, new_refresh = rotate_refresh_token(db, plaintext=raw)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired refresh token",
+        ) from None
+    access_token = create_access_token(data={"sub": str(user.id)})
+    return AuthRefreshResponse(access_token=access_token, refresh_token=new_refresh)
+
+
 @router.get("/me")
 async def auth_me(current_user: Annotated[User, Depends(get_current_user)]):
     """Return the authenticated user (Bearer JWT)."""
@@ -228,14 +333,11 @@ async def auth_me(current_user: Annotated[User, Depends(get_current_user)]):
     }
 
 
-@router.get("/google")
-async def google_oauth_start(
-    client: str | None = None,
-    next: str | None = None,  # noqa: A002
-):
-    """Initiate Google OAuth flow."""
-    cb = _web_oauth_callback_uri("google")
-    state = mint_web_oauth_state(provider="google", client=client, next_url=next)
+@router.get("/google/link/start", response_model=ExtensionAuthUrlResponse)
+async def google_oauth_link_start(current_user: Annotated[User, Depends(get_current_user)]):
+    """Start OAuth to attach a Google identity to the logged-in VT user (C7.4)."""
+    cb = _web_link_callback_uri("google")
+    state = mint_web_link_oauth_state(user_id=str(current_user.id), provider="google")
     params = {
         "client_id": app_config.auth.google.client_id,
         "redirect_uri": cb,
@@ -243,9 +345,133 @@ async def google_oauth_start(
         "scope": "openid email profile",
         "state": state,
         "access_type": "online",
+        "prompt": "select_account consent",
     }
-    google_auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params, quote_via=quote)
+    auth_url = "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params, quote_via=quote)
+    return ExtensionAuthUrlResponse(auth_url=auth_url)
+
+
+@router.get("/google/link/callback")
+async def google_oauth_link_callback(
+    db: Annotated[Session, Depends(get_db)],
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+):
+    if error and not code:
+        logger.warning("Google link callback error: %s", error_description or error)
+        return _redirect_web_settings_after_link(success=False, reason="provider_denied")
+    if not code or not state:
+        return _redirect_web_settings_after_link(success=False, reason="missing_code")
+    try:
+        payload = parse_web_link_oauth_state(state)
+    except ValueError:
+        return _redirect_web_settings_after_link(success=False, reason="invalid_state")
+    if payload.get("provider") != "google":
+        return _redirect_web_settings_after_link(success=False, reason="state_mismatch")
+    try:
+        uid = UUID(str(payload.get("uid")))
+    except ValueError:
+        return _redirect_web_settings_after_link(success=False, reason="invalid_state")
+    cb = _web_link_callback_uri("google")
+    try:
+        profile = await exchange_google_authorization_code(code=code, redirect_uri=cb, code_verifier=None)
+    except OAuthExchangeError:
+        return _redirect_web_settings_after_link(success=False, reason="token_exchange")
+    try:
+        link_oauth_identity_to_user(db, target_user_id=uid, provider="google", profile=profile)
+    except HTTPException as e:
+        if e.status_code == status.HTTP_409_CONFLICT:
+            return _redirect_web_settings_after_link(success=False, reason=str(e.detail))
+        if e.status_code == status.HTTP_404_NOT_FOUND:
+            return _redirect_web_settings_after_link(success=False, reason="user_not_found")
+        raise
+    return _redirect_web_settings_after_link(success=True, provider="google")
+
+
+@router.get("/yandex/link/start", response_model=ExtensionAuthUrlResponse)
+async def yandex_oauth_link_start(current_user: Annotated[User, Depends(get_current_user)]):
+    cb = _web_link_callback_uri("yandex")
+    state = mint_web_link_oauth_state(user_id=str(current_user.id), provider="yandex")
+    params = {
+        "client_id": app_config.auth.yandex.client_id,
+        "redirect_uri": cb,
+        "response_type": "code",
+        "state": state,
+        "force_confirm": "yes",
+    }
+    auth_url = "https://oauth.yandex.ru/authorize?" + urlencode(params, quote_via=quote)
+    return ExtensionAuthUrlResponse(auth_url=auth_url)
+
+
+@router.get("/yandex/link/callback")
+async def yandex_oauth_link_callback(
+    db: Annotated[Session, Depends(get_db)],
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+):
+    if error and not code:
+        logger.warning("Yandex link callback error: %s", error_description or error)
+        return _redirect_web_settings_after_link(success=False, reason="provider_denied")
+    if not code or not state:
+        return _redirect_web_settings_after_link(success=False, reason="missing_code")
+    try:
+        payload = parse_web_link_oauth_state(state)
+    except ValueError:
+        return _redirect_web_settings_after_link(success=False, reason="invalid_state")
+    if payload.get("provider") != "yandex":
+        return _redirect_web_settings_after_link(success=False, reason="state_mismatch")
+    try:
+        uid = UUID(str(payload.get("uid")))
+    except ValueError:
+        return _redirect_web_settings_after_link(success=False, reason="invalid_state")
+    cb = _web_link_callback_uri("yandex")
+    try:
+        profile = await exchange_yandex_authorization_code(code=code, redirect_uri=cb, code_verifier=None)
+    except OAuthExchangeError:
+        return _redirect_web_settings_after_link(success=False, reason="token_exchange")
+    try:
+        link_oauth_identity_to_user(db, target_user_id=uid, provider="yandex", profile=profile)
+    except HTTPException as e:
+        if e.status_code == status.HTTP_409_CONFLICT:
+            return _redirect_web_settings_after_link(success=False, reason=str(e.detail))
+        if e.status_code == status.HTTP_404_NOT_FOUND:
+            return _redirect_web_settings_after_link(success=False, reason="user_not_found")
+        raise
+    return _redirect_web_settings_after_link(success=True, provider="yandex")
+
+
+@router.get("/google")
+async def google_oauth_start(
+    client: str | None = None,
+    next: str | None = None,  # noqa: A002
+):
+    """Initiate Google OAuth flow."""
+    google_auth_url = _google_web_login_authorize_url(client=client, next_url=next, prompt=None)
     return RedirectResponse(url=google_auth_url)
+
+
+@router.get("/google/extension/authorize-url", response_model=ExtensionAuthUrlResponse)
+async def google_extension_web_aligned_authorize_url(
+    client: str | None = Query("extension"),
+    next: str = Query(..., description="chrome.identity.getRedirectURL(...)"),
+):
+    """
+    JSON authorize URL for MV3 extension: same OAuth as Web UI (server callback), without a localhost
+    redirect hop inside chrome.identity.launchWebAuthFlow (popup fetches this first, then opens provider).
+    """
+    nxt = (next or "").strip()
+    if not _is_allowed_extension_redirect(nxt):
+        raise HTTPException(status_code=400, detail="Invalid extension redirect URL (next)")
+    auth_url = _google_web_login_authorize_url(
+        client=client,
+        next_url=nxt,
+        prompt="select_account",
+    )
+    return ExtensionAuthUrlResponse(auth_url=auth_url)
 
 
 @router.get("/google/extension/start", response_model=ExtensionAuthUrlResponse)
@@ -340,16 +566,29 @@ async def yandex_oauth_start(
     next: str | None = None,  # noqa: A002
 ):
     """Initiate Yandex OAuth flow."""
-    cb = _web_oauth_callback_uri("yandex")
-    state = mint_web_oauth_state(provider="yandex", client=client, next_url=next)
-    params = {
-        "client_id": app_config.auth.yandex.client_id,
-        "redirect_uri": cb,
-        "response_type": "code",
-        "state": state,
-    }
-    yandex_auth_url = "https://oauth.yandex.ru/authorize?" + urlencode(params, quote_via=quote)
+    yandex_auth_url = _yandex_web_login_authorize_url(
+        client=client,
+        next_url=next,
+        force_confirm=True,
+    )
     return RedirectResponse(url=yandex_auth_url)
+
+
+@router.get("/yandex/extension/authorize-url", response_model=ExtensionAuthUrlResponse)
+async def yandex_extension_web_aligned_authorize_url(
+    client: str | None = Query("extension"),
+    next: str = Query(..., description="chrome.identity.getRedirectURL(...)"),
+):
+    """Same as GET /yandex for extension: JSON authorize URL; force_confirm so account/consent UI appears."""
+    nxt = (next or "").strip()
+    if not _is_allowed_extension_redirect(nxt):
+        raise HTTPException(status_code=400, detail="Invalid extension redirect URL (next)")
+    auth_url = _yandex_web_login_authorize_url(
+        client=client,
+        next_url=nxt,
+        force_confirm=True,
+    )
+    return ExtensionAuthUrlResponse(auth_url=auth_url)
 
 
 @router.get("/yandex/extension/start", response_model=ExtensionAuthUrlResponse)

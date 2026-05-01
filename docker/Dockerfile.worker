@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1
+# BuildKit: кэш pip между сборками.
 FROM python:3.11-slim
 
 ENV PIP_BREAK_SYSTEM_PACKAGES=1 \
@@ -9,6 +11,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy project files
@@ -18,7 +21,8 @@ COPY configs/ /app/configs/
 
 WORKDIR /app/server
 
-RUN pip install --upgrade pip
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip setuptools wheel
 
 # Install Poetry and dependencies
 # RUN pip install --no-cache-dir poetry && \
@@ -26,12 +30,14 @@ RUN pip install --upgrade pip
 #     poetry install --without dev --no-interaction --no-ansi --no-root
 
 # 1. Устанавливаем poetry и плагин
-RUN pip install --no-cache-dir poetry poetry-plugin-export
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install poetry poetry-plugin-export
 
-# 2. Экспортируем и устанавливаем ЧЕРЕЗ PIP напрямую в системный каталог
-# Флаг --target гарантирует, что пакеты попадут именно туда, где их ищет Python
-RUN poetry export -f requirements.txt --output requirements.txt --without-hashes && \
-    pip install --no-cache-dir -r requirements.txt --target /usr/local/lib/python3.11/site-packages
+# 2. Ставим зависимости в system site-packages без lock/export.
+RUN poetry config virtualenvs.create false
+RUN --mount=type=cache,target=/root/.cache/pip \
+    rm -f poetry.lock && \
+    poetry install --only main --no-interaction --no-ansi --no-root
 
 # Устанавливаем только сам poetry
 # RUN pip install --no-cache-dir poetry
@@ -42,6 +48,6 @@ RUN poetry export -f requirements.txt --output requirements.txt --without-hashes
 
 # Run Celery worker
 # CMD ["celery", "-A", "worker", "worker", "--loglevel=info", "--queues=asr,diarization,llm,cleanup"]
-CMD ["python", "-m", "celery", "-A", "worker", "worker", "--loglevel=info", "--queues=asr,diarization,llm,cleanup"]
+CMD ["python", "-m", "celery", "-A", "workers.celery_app.celery_app", "worker", "--loglevel=info", "--queues=asr,llm,cleanup"]
 
 

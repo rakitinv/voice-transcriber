@@ -1,0 +1,65 @@
+# syntax=docker/dockerfile:1
+FROM python:3.11-slim
+
+# cpu: smaller image — torch/torchaudio from PyTorch CPU index (no nvidia-* wheels).
+# cuda: full Poetry export (CUDA-capable torch + nvidia-* deps) for GPU nodes.
+ARG DIARIZATION_TORCH=cpu
+
+ENV PIP_BREAK_SYSTEM_PACKAGES=1 \
+    PYTHONPATH=/app/server
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    ffmpeg \
+    libgomp1 \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY server/pyproject.toml server/poetry.lock* /app/server/
+COPY server/ /app/server/
+COPY configs/ /app/configs/
+COPY docker/diarization_strip_torch_cuda.py /tmp/diarization_strip_torch_cuda.py
+
+WORKDIR /app/server
+
+# BuildKit: persist pip downloads between builds (requires DOCKER_BUILDKIT=1, default in recent Docker).
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip setuptools wheel
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install poetry poetry-plugin-export
+
+# Some environments (corporate mirrors, restricted indices) may not have `lightning`.
+# Force PyPI for diarization image so `pyannote-audio` can resolve it.
+ENV PIP_INDEX_URL=https://pypi.org/simple
+
+# Install main + optional diarization group (pyannote stack). Keep poetry.lock so the
+# solver cannot silently omit pyannote/torch (see README / issue: rm -f poetry.lock broke installs).
+RUN poetry config virtualenvs.create false
+RUN --mount=type=cache,target=/root/.cache/pip \
+    poetry install --with diarization --no-interaction --no-ansi --no-root
+
+# Torch selection (optional): override to CUDA builds after Poetry install.
+ARG DIARIZATION_TORCH=cpu
+RUN --mount=type=cache,target=/root/.cache/pip \
+    if [ "$DIARIZATION_TORCH" = "cuda" ]; then \
+      echo "Upgrading torch/torchaudio to CUDA 12.8" && \
+      pip install --upgrade \
+        torch==2.8.0+cu128 \
+        torchaudio==2.8.0+cu128 \
+        --index-url https://download.pytorch.org/whl/cu128; \
+    else \
+      echo "Using CPU torch from Poetry group (no action)"; \
+    fi
+
+# Fail the image build if pyannote is missing (avoids "running" worker that errors on first task).
+RUN python -c "from pyannote.audio import Pipeline; print('pyannote.audio import ok')"
+
+# Default cache location; can be overridden via configs/diarization.yaml model_cache_dir and volume mounts.
+ENV HF_HOME=/models \
+    HUGGINGFACE_HUB_CACHE=/models \
+    TRANSFORMERS_CACHE=/models
+
+CMD ["python", "-m", "workers.diarization_entrypoint"]

@@ -1,4 +1,9 @@
 # LLM providers configuration (skeleton)
+#
+# ТЗ §7.6: один rolling Markdown-summary на всю цепочку (recording_session_id).
+# Пересчитывается после успешного финального транскрипта каждого сегмента (ASR или diarized).
+session_summary_enabled: true
+session_summary_max_input_chars: 120000
 
 default_provider: ollama
 
@@ -6,7 +11,8 @@ providers:
   ollama:
     enabled: true
     base_url: http://localhost:11434
-    model: llama3
+    # Имя должно совпадать с строкой в `ollama list` на машине с Ollama (иначе POST /api/generate → 404).
+    model: ilyagusev/saiga_llama3:latest
   lmstudio:
     enabled: false
   llama_cpp:

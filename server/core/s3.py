@@ -17,6 +17,7 @@ import boto3
 from botocore.client import BaseClient
 from botocore.exceptions import ClientError
 
+from .audio_format import s3_audio_object_name
 from .config import app_config
 from .logging import logger
 from .security import decrypt_data, encrypt_data
@@ -52,7 +53,13 @@ class S3Storage:
         return f"users/{user_id}/conversations/{conversation_id}/{filename}"
 
     def upload_audio(
-        self, audio_data: bytes, user_id: str, conversation_id: str, encrypt: bool = True
+        self,
+        audio_data: bytes,
+        user_id: str,
+        conversation_id: str,
+        *,
+        audio_object_ext: str = "webm",
+        encrypt: bool = True,
     ) -> str:
         """
         Upload audio file to S3.
@@ -61,19 +68,25 @@ class S3Storage:
             audio_data: Raw audio bytes
             user_id: User ID
             conversation_id: Conversation ID
+            audio_object_ext: расширение без точки (webm, mp3, wav, …) — имя ключа audio.<ext>
             encrypt: Whether to encrypt the data
 
         Returns:
             S3 key of the uploaded file
         """
-        key = self._get_key(user_id, conversation_id, "audio.webm")
+        key = self._get_key(user_id, conversation_id, s3_audio_object_name(audio_object_ext))
         data = encrypt_data(audio_data, user_id) if encrypt else audio_data
         self.client.put_object(Bucket=self.bucket, Key=key, Body=data)
         logger.info(f"Uploaded audio to {key}")
         return key
 
     def download_audio(
-        self, user_id: str, conversation_id: str, decrypt: bool = True
+        self,
+        user_id: str,
+        conversation_id: str,
+        *,
+        audio_object_ext: str = "webm",
+        decrypt: bool = True,
     ) -> bytes:
         """
         Download audio file from S3.
@@ -81,12 +94,13 @@ class S3Storage:
         Args:
             user_id: User ID
             conversation_id: Conversation ID
+            audio_object_ext: расширение без точки, как при upload_audio
             decrypt: Whether to decrypt the data
 
         Returns:
             Raw audio bytes
         """
-        key = self._get_key(user_id, conversation_id, "audio.webm")
+        key = self._get_key(user_id, conversation_id, s3_audio_object_name(audio_object_ext))
         response = self.client.get_object(Bucket=self.bucket, Key=key)
         data = response["Body"].read()
         return decrypt_data(data, user_id) if decrypt else data
@@ -151,6 +165,38 @@ class S3Storage:
     ) -> Optional[str]:
         """Download summary Markdown from S3."""
         key = self._get_key(user_id, conversation_id, "summary.md")
+        try:
+            response = self.client.get_object(Bucket=self.bucket, Key=key)
+            data = response["Body"].read()
+            if decrypt:
+                data = decrypt_data(data, user_id)
+            return data.decode("utf-8")
+        except ClientError:
+            return None
+
+    def _recording_session_summary_key(self, user_id: str, recording_session_id: str) -> str:
+        return f"users/{user_id}/recording_sessions/{recording_session_id}/summary.md"
+
+    def upload_recording_session_summary(
+        self,
+        summary: str,
+        user_id: str,
+        recording_session_id: str,
+        *,
+        encrypt: bool = True,
+    ) -> str:
+        """Persist §7.6 chain summary next to user/session namespace."""
+        key = self._recording_session_summary_key(user_id, recording_session_id)
+        data = summary.encode("utf-8")
+        data = encrypt_data(data, user_id) if encrypt else data
+        self.client.put_object(Bucket=self.bucket, Key=key, Body=data)
+        logger.info(f"Uploaded recording_session summary to {key}")
+        return key
+
+    def download_recording_session_summary(
+        self, user_id: str, recording_session_id: str, decrypt: bool = True
+    ) -> Optional[str]:
+        key = self._recording_session_summary_key(user_id, recording_session_id)
         try:
             response = self.client.get_object(Bucket=self.bucket, Key=key)
             data = response["Body"].read()

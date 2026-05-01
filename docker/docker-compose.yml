@@ -33,6 +33,8 @@ services:
       VT_WEBUI_ORIGIN: http://localhost:3002
       # Браузерные OAuth redirect_uri для Web UI должны совпадать с консолью провайдера (хост:порт снаружи Docker).
       VT_PUBLIC_API_URL: ${VT_PUBLIC_API_URL:-http://localhost:8002}
+      # Срок жизни refresh-сессии сервиса в днях (C7.2); см. server/app/services/service_refresh_token.py
+      VT_REFRESH_TOKEN_TTL_DAYS: ${VT_REFRESH_TOKEN_TTL_DAYS:-90}
       # Необязательно: явный список Origin для CORS (axios withCredentials). Пусто = localhost/127 + regex.
       VT_CORS_ORIGINS: ${VT_CORS_ORIGINS:-}
       VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
@@ -43,6 +45,10 @@ services:
       VT_S3_SECRET_KEY: minioadmin
       # Частичные транскрипты между несколькими репликами API (см. server/app/api/ws_hub.py).
       VT_TRANSCRIPT_REDIS: "1"
+      # WebSocket JWT (C7.5, docs/WEBSOCKET.md): при VT_ENVIRONMENT=production query access_token запрещён; канон — Sec-WebSocket-Protocol bearer.<JWT>.
+      # Переопределение через .env рядом с compose: VT_WS_ALLOW_QUERY_TOKEN=1 (отладка), VT_WS_REQUIRE_SUBPROTOCOL=1 (только subprotocol в любом env).
+      VT_WS_ALLOW_QUERY_TOKEN: ${VT_WS_ALLOW_QUERY_TOKEN:-}
+      VT_WS_REQUIRE_SUBPROTOCOL: ${VT_WS_REQUIRE_SUBPROTOCOL:-}
       # Опционально: единый секрет JWT для API/воркера/CLI (см. server/core/security.py). Иначе — из configs/server.yaml (Google client_secret).
       VT_JWT_SECRET: ${VT_JWT_SECRET:-}
       # ASR quality tuning (faster-whisper)
@@ -85,12 +91,17 @@ services:
     networks:
       - voice-transcriber
 
-  # Fast / general Celery worker: отвечает за "asr" (legacy/прочие задачи), llm, cleanup.
-  # Финальный ASR вынесен в worker-final (queue asr_final) чтобы не конкурировать по CPU/GPU.
+  # Fast / general Celery worker: очередь asr_fast (слайсы §17), legacy asr, llm, cleanup.
+  # Полный final ASR и chord callback — в worker-final (asr_final).
+  # Для выноса LLM/embeddings в отдельные процессы: профиль scale_llm + VT_MAIN_WORKER_QUEUES без llm.
   worker:
     build:
       context: ..
       dockerfile: docker/Dockerfile.worker
+    env_file:
+      - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       PYTHONPATH: /app/server
       VT_ENVIRONMENT: production
@@ -115,6 +126,10 @@ services:
       VT_ASR_TEMPERATURE: ${VT_ASR_TEMPERATURE:-0.0}
       VT_ASR_PATIENCE: ${VT_ASR_PATIENCE:-1.0}
       VT_ASR_CONDITION_ON_PREVIOUS_TEXT: ${VT_ASR_CONDITION_ON_PREVIOUS_TEXT:-1}
+      # Ollama для §7.6: обязательно в block environment (не только env_file), иначе compose может
+      # передать пустое значение и worker остаётся на localhost из llm.yaml → Errno 111.
+      VT_OLLAMA_BASE_URL: "${VT_OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
+      VT_OLLAMA_MODEL: "${VT_OLLAMA_MODEL:-}"
     volumes:
       - ../configs:/app/configs:ro
       - ../server/logs:/app/server/logs
@@ -127,7 +142,52 @@ services:
         condition: service_healthy
       minio:
         condition: service_started
-    command: python -m celery -A workers.celery_app.celery_app worker --loglevel=info --queues=asr,llm,cleanup
+    command: python -m celery -A workers.celery_app.celery_app worker --loglevel=info --queues=${VT_MAIN_WORKER_QUEUES:-asr_fast,asr,llm,cleanup}
+    networks:
+      - voice-transcriber
+
+  # Дополнительные потребители только очереди llm (summary §7.6, embeddings).
+  # Запуск: docker compose --profile scale_llm up -d worker-llm
+  # В .env задайте VT_MAIN_WORKER_QUEUES=asr_fast,asr,cleanup у основного worker, чтобы не дублировать llm.
+  worker-llm:
+    profiles:
+      - scale_llm
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.worker
+    env_file:
+      - .env
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      PYTHONPATH: /app/server
+      VT_ENVIRONMENT: production
+      VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
+      VT_REDIS_URL: redis://redis:6379/0
+      VT_S3_ENDPOINT: http://minio:9000
+      VT_S3_BUCKET: voice-transcriber
+      VT_S3_ACCESS_KEY: minioadmin
+      VT_S3_SECRET_KEY: minioadmin
+      VT_JWT_SECRET: ${VT_JWT_SECRET:-}
+      VT_CELERY_VISIBILITY_TIMEOUT: ${VT_CELERY_VISIBILITY_TIMEOUT:-14400}
+      VT_ASR_MODEL: ${VT_ASR_MODEL:-medium}
+      VT_ASR_DEVICE: ${VT_ASR_DEVICE:-cpu}
+      VT_ASR_COMPUTE_TYPE: ${VT_ASR_COMPUTE_TYPE:-int8}
+      VT_OLLAMA_BASE_URL: "${VT_OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
+      VT_OLLAMA_MODEL: "${VT_OLLAMA_MODEL:-}"
+    volumes:
+      - ../configs:/app/configs:ro
+      - ../server/logs:/app/server/logs
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    command: python -m celery -A workers.celery_app.celery_app worker --loglevel=info --queues=llm --concurrency=${VT_LLM_WORKER_CONCURRENCY:-2}
     networks:
       - voice-transcriber
 

@@ -52,3 +52,25 @@
   color: var(--fg-muted);
   text-align: center;
 }
+
+.emptyRow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  animation: vtSpin 0.9s linear infinite;
+}
+
+@keyframes vtSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}

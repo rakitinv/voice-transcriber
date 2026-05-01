@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 import secrets
 from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
@@ -23,8 +24,23 @@ from passlib.context import CryptContext
 
 from .config import app_config
 
+
+def _jwt_signing_secret() -> str:
+    """
+    Secret for signing/verifying API JWTs.
+
+    Prefer **VT_JWT_SECRET** (same value in API, worker, and any tool that mints tokens for tests)
+    so tokens are not tied to OAuth client_secret. If unset, falls back to Google OAuth
+    **client_secret** from config (legacy; must match the issuer that created the token).
+    """
+    explicit = (os.environ.get("VT_JWT_SECRET") or "").strip()
+    if explicit:
+        return explicit
+    return app_config.auth.google.client_secret
+
+
 # JWT settings
-JWT_SECRET_KEY = app_config.auth.google.client_secret  # In production, use a dedicated secret
+JWT_SECRET_KEY = _jwt_signing_secret()
 JWT_ALGORITHM = "HS256"
 JWT_ACCESS_TOKEN_EXPIRE_MINUTES = 30
 

@@ -91,21 +91,21 @@
 
 ## Phase C — Расширенные возможности
 
-- [ ] **C1** Post-hoc diarization + **серверная** настройка автозапуска в pipeline (`configs/diarization.yaml` и деплой; **не** переключатель в Web UI) (канон: [DIARIZATION_ALIGNMENT_VERSIONING.md](./DIARIZATION_ALIGNMENT_VERSIONING.md))
+- [x] **C1** Post-hoc diarization + **серверная** настройка автозапуска в pipeline (`configs/diarization.yaml` и деплой; **не** переключатель в Web UI) (канон: [DIARIZATION_ALIGNMENT_VERSIONING.md](./DIARIZATION_ALIGNMENT_VERSIONING.md)) — ручная приёмка: [PHASE_C_ACCEPTANCE.md](./PHASE_C_ACCEPTANCE.md)
   - [x] **C1.1** Транскрипты: версионирование + `active_transcript_id` (Scheme 2) — хранить историю, отдавать только активную
   - [x] **C1.2** Rerun diarization: endpoint + UI confirm (перезапись = новая версия, promote только на success)
   - [x] **C1.3** Провайдер `pyannote` + отдельный образ воркера: в compose **два** сервиса — `diarization-worker` (CPU wheels, build-arg `DIARIZATION_TORCH=cpu`) и `diarization-worker-gpu` (CUDA wheels, профиль `gpu`, `DIARIZATION_TORCH=cuda`); см. [docker/README.md](../docker/README.md#diarization-cpu-vs-cuda-images)
-- [ ] **C2** Semantic search (embeddings), если не сделано в A
-- [ ] **C3** Автопродление (ТЗ §7): триггеры, хвост в A, связи в БД
-- [ ] **C4** Dual capture (микрофон + вкладка) → микширование в один `audio.webm`
-- [ ] **C5** Метрики Prometheus (или эквивалент) по минимальному набору ТЗ §16
-- [ ] **C6** CLI: API key, цепочка разговоров, JSON + exit code + polling
-- [ ] **C7** Прод: CORS, секреты, OAuth, политика токенов в WS — канон требований: [AUTH_AND_IDENTITY.md](./AUTH_AND_IDENTITY.md)
+- [x] **C2** Semantic search (embeddings), если не сделано в A
+- [x] **C3** Автопродление (ТЗ §7): триггеры, хвост в A, связи в БД
+- [x] **C4** Dual capture (микрофон + вкладка) → микширование в один `audio.webm`
+- [x] **C5** Метрики Prometheus (или эквивалент) по минимальному набору ТЗ §16
+- [x] **C6** CLI: API key, цепочка разговоров, JSON + exit code + polling
+- [x] **C7** Прод: CORS, секреты, OAuth, политика токенов в WS — канон требований: [AUTH_AND_IDENTITY.md](./AUTH_AND_IDENTITY.md); регрессия: [PHASE_C_ACCEPTANCE.md](./PHASE_C_ACCEPTANCE.md)
   - [x] **C7.1** Реальный обмен OAuth `code` на backend (Google, Yandex): token endpoint + userinfo / `id_token`, создание/поиск пользователя по **`(provider, sub)`**; убрать mock в `extension/finalize` и callback Web UI; **`refresh_token` провайдера не хранить** для текущих сценариев
-  - [ ] **C7.2** Долгая сессия **сервиса**: refresh-токен (или эквивалент) + **`POST /api/auth/refresh`** (имя согласовать в `openapi.yaml`), ротация/отзыв; короткий access JWT для REST/WS
+  - [x] **C7.2** Долгая сессия **сервиса**: refresh-токен (или эквивалент) + **`POST /api/auth/refresh`** (имя согласовать в `openapi.yaml`), ротация/отзыв; короткий access JWT для REST/WS
   - [x] **C7.3** Защита публичного клиента расширения: **PKCE** + **state** (или эквивалент) на цепочке authorize → finalize; не дублировать построение authorize URL — опираться на **`GET /api/auth/{provider}/extension/start`**
-  - [ ] **C7.4** **Web UI:** слияние аккаунтов — таблица связей пользователь↔провайдерский субъект, UI-поток подтверждения; после слияния любой привязанный провайдер ведёт к одному `user_id` при корректном поиске в C7.1
-  - [ ] **C7.5** Политика токенов в **WebSocket** prod: ужесточение относительно JWT в subprotocol (см. ТЗ §8 Phase C, `WEBSOCKET.md`)
+  - [x] **C7.4** **Web UI:** слияние аккаунтов — таблица связей пользователь↔провайдерский субъект, UI-поток подтверждения; после слияния любой привязанный провайдер ведёт к одному `user_id` при корректном поиске в C7.1
+  - [x] **C7.5** Политика токенов в **WebSocket** prod: только subprotocol `bearer.<JWT>`; query отключён при `VT_ENVIRONMENT=production` (override: `VT_WS_ALLOW_QUERY_TOKEN`, `VT_WS_REQUIRE_SUBPROTOCOL`) — `WEBSOCKET.md`, `ws_auth.py`
 
 **Phase C закрыта:** [ ] да / [ ] нет **Дата:** ___________
 
@@ -113,7 +113,7 @@
 
 ## ТЗ §17 — сегментация, fast/final, `finalize`, чанки upload
 
-**Постановка зафиксирована:** [TECHNICAL_SPECIFICATION.md §17](./TECHNICAL_SPECIFICATION.md) (чеклист **§17.11**).
+**Постановка зафиксирована:** [TECHNICAL_SPECIFICATION.md §17](./TECHNICAL_SPECIFICATION.md). Чеклист готовности **§17.11** там же должен совпадать по смыслу с отметками в этой секции дорожной карты.
 
 - [x] **`visibility_timeout` Celery:** переменная **`VT_CELERY_VISIBILITY_TIMEOUT`** (секунды), в compose по умолчанию **14400**; см. `workers/celery_app.py`, [docker/README.md](../docker/README.md)
 - [x] **WS `finalize` / `finalize_id`:** канал `/ws/audio` принимает JSON `finalize`, ответ `finalize_ack` / `duplicate`, Redis SET NX при **`VT_REDIS_URL`**; см. [WEBSOCKET.md](./WEBSOCKET.md), `app/api/ws_finalize_store.py`
@@ -121,18 +121,18 @@
 - [x] **`finalize` → S3 + fast transcript + Celery `transcribe_file` с `transcript_meta_extra`** (`realtime_finalize.py`, `websocket.py`)
 - [x] **REST/export:** query **`tier=auto|fast|final`** (`conversations.py`, `openapi.yaml`)
 - [ ] OpenAPI codegen только для WS (WS полностью не в OAS) — по необходимости
-- [ ] Очереди **`asr_fast`** / приоритеты отдельно от **`asr_final`**
-- [ ] Нарезка/merge длинного upload + **final** pipeline
-- [ ] Web UI / расширение: переключатель fast/final, кнопки экспорта по §17.8–§17.9
+- [x] **Очереди `asr_fast` / отдельно от `asr_final`:** `transcribe_slice` → **`asr_fast`**, `transcribe_file` и **`finalize_parallel_transcript`** → **`asr_final`**; compose **`worker`:** `--queues=asr_fast,asr,llm,cleanup`; **`worker-final`:** `asr_final` — см. `workers/celery_app.py`, `docker-compose.yml`
+- [x] **Нарезка/merge длинного upload + final pipeline:** последовательный chunking и параллельный chord + merge в **`workers/tasks/asr.py`** (`VT_ASR_CHUNK_SECONDS`, **`VT_ASR_PARALLEL_CHUNKS`**)
+- [x] **Web UI / расширение (§17.8–§17.9):** Web UI — переключатель Fast/Final и метаданные стадии на **`ConversationViewerPage`**; расширение — канонический **`GET /export`** с **`tier=final`**, кнопки final до **`transcript_status=success`** неактивны; локально «Save live text» для live/fast
 
 ---
 
 ## Параллельно (не блокируют A)
 
-- [ ] LLM summary + решение по цепочке автопродления (ТЗ §7.6)
+- [x] LLM summary + решение по цепочке автопродления (ТЗ §7.6) — rolling summary на `recording_session_id`, см. `TECHNICAL_SPECIFICATION.md` §7.6
 - [x] Ссылка из `docs/README.md` на ТЗ и дорожную карту
 - [ ] Пометка в устаревших `main_*` / «канон — TECHNICAL_SPECIFICATION»
-- [ ] Нагрузка Celery: отдельные очереди/масштабирование воркеров по мере роста
+- [x] Нагрузка Celery: отдельные очереди/масштабирование воркеров по мере роста — очереди уже разведены (`asr_fast`, `asr_final`, `asr`, `llm`, `diarization`, `cleanup`); compose: **`VT_MAIN_WORKER_QUEUES`**, профиль **`scale_llm`** + сервис **`worker-llm`**, см. [docker/README.md](../docker/README.md)
 
 ---
 
@@ -165,6 +165,10 @@
 | 2026-04-23 | Auth / roadmap | [AUTH_AND_IDENTITY.md](./AUTH_AND_IDENTITY.md) — канон требований; ТЗ §3.4; **B2.0**, детализация **C7.1–C7.5** |
 | 2026-04-23 | Phase B закрытие | Расширение: shell popup + side panel, context menus (Start / Stop / Upload / Settings / Open panel), offscreen mic, persist `RecordingSessionV1`, export/refresh GET, Vitest в `browser-extension/`; приёмка — [PHASE_B_ACCEPTANCE.md](./PHASE_B_ACCEPTANCE.md) |
 | 2026-04-30 | Phase C (C7.1, C7.3) | Реальный OAuth (Google/Yandex): httpx token + userinfo; таблица `user_oauth_identities`; Web UI `state` JWT; расширение PKCE + подписанный `state`, authorize только через `extension/start`; compose **`VT_PUBLIC_API_URL`** для redirect_uri с Docker |
+| 2026-04-30 | Phase C (C7.2) | Таблица `auth_refresh_sessions` (хранится SHA-256 refresh); выдача при OAuth Web/extension; **`POST /api/auth/refresh`** с ротацией; Web UI: fragment `refresh_token` + axios interceptor; расширение: `refreshToken` в storage + `verifyOrRefreshSession`; **`VT_REFRESH_TOKEN_TTL_DAYS`** |
+| 2026-04-30 | Phase C (C7.4) | Привязка провайдеров в Web UI: JWT state `vt_oauth_web_link`; **`GET /api/auth/{provider}/link/start|callback`**; **`GET /api/settings/oauth-identities`**; страница Settings — список + Link Google/Yandex; конфликты → redirect `?oauth_link=error&reason=` |
+| 2026-04-30 | Phase C (C7 + C1) | Родительские пункты **C7**, **C1** отмечены выполненными по коду и конфигам; чеклист ручной приёмки и порядок проверки — [PHASE_C_ACCEPTANCE.md](./PHASE_C_ACCEPTANCE.md); обновлён статус в [DIARIZATION_ALIGNMENT_VERSIONING.md](./DIARIZATION_ALIGNMENT_VERSIONING.md) |
+| 2026-05-01 | ТЗ §17 + документация | Закрыты очереди **`asr_fast`/`asr_final`**, chunking/merge, UX §17.8–§17.9; согласованы **§17.11** ТЗ и [PHASE_B_ACCEPTANCE.md](./PHASE_B_ACCEPTANCE.md) (**finalize**, export **`tier=final`**); backlog — codegen WS, OpenAPI-детализация полного JSON разговора |
 
 ---
 
@@ -183,3 +187,5 @@
 | 1.8 | 2026-04-23 | B2.0 (гибрид OAuth расширения); C7 разбит на C7.1–C7.5 + ссылка на AUTH_AND_IDENTITY.md |
 | 1.9 | 2026-04-23 | Phase B: явные пункты **B2.6–B2.8** — крупная доработка UI/UX расширения (Side Panel, popup, context menus, persist, жизненный цикл) по [BROWSER_EXTENSION_UI.md](./BROWSER_EXTENSION_UI.md) |
 | 1.10 | 2026-04-23 | Phase B закрыта: B2.0–B2.8 отмечены выполненными; [PHASE_B_ACCEPTANCE.md](./PHASE_B_ACCEPTANCE.md); Vitest в `browser-extension/`; [TESTING.md](./TESTING.md) — раздел Phase B |
+| 1.11 | 2026-04-30 | Phase C: родительские **C7**, **C1** закрыты по реализации; [PHASE_C_ACCEPTANCE.md](./PHASE_C_ACCEPTANCE.md) для ручной приёмки |
+| 1.12 | 2026-05-01 | ТЗ §17: отмечены очереди **`asr_fast`/`asr_final`**, chunking/merge, Web UI + расширение (§17.8–§17.9); синхронизированы **§17.11** ТЗ и [PHASE_B_ACCEPTANCE.md](./PHASE_B_ACCEPTANCE.md); codegen WS — по необходимости |

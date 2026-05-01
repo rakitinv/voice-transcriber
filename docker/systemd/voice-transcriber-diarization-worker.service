@@ -1,0 +1,25 @@
+[Unit]
+Description=Voice Transcriber diarization worker (Docker Compose profile)
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Directory with docker-compose.yml
+WorkingDirectory=/opt/voice-transcriber/docker
+
+# Optional: environment overrides (tokens, secrets, publish ports, etc.)
+EnvironmentFile=-/etc/voice-transcriber/voice-transcriber.env
+
+# Start only diarization worker; base stack can live on another host.
+ExecStart=/usr/bin/docker compose --profile diarization up -d --build diarization-worker
+ExecStop=/usr/bin/docker compose --profile diarization stop diarization-worker
+
+# If you want a clean slate on stop (optional), replace ExecStop with:
+# ExecStop=/usr/bin/docker compose --profile diarization down
+
+[Install]
+WantedBy=multi-user.target
+

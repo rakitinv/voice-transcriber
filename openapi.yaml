@@ -11,7 +11,7 @@ info:
     - `ws://{host}/ws/audio/{conversation_id}` — аудио-чанки (не под префиксом `/api`)
     - `ws://{host}/ws/transcript/{conversation_id}` — обновления транскрипта
 
-    JWT: query `access_token` или `Sec-WebSocket-Protocol: bearer.<JWT>`. Детали — в WEBSOCKET.md.
+    JWT: в dev — query `access_token` или `Sec-WebSocket-Protocol: bearer.<JWT>`; в **production** только subprotocol (query отклоняется). Переменные `VT_WS_ALLOW_QUERY_TOKEN`, `VT_WS_REQUIRE_SUBPROTOCOL`. Детали — в WEBSOCKET.md.
 
 servers:
   - url: http://localhost:8000
@@ -67,6 +67,74 @@ paths:
       responses:
         "302":
           description: Redirect
+
+  /api/auth/google/extension/authorize-url:
+    get:
+      tags: [auth]
+      summary: Прямой URL Google OAuth для расширения (как Web UI)
+      description: |
+        Возвращает `auth_url` провайдера с `redirect_uri` на сервер (`/api/auth/google/callback`), как при GET `/api/auth/google`.
+        Расширение делает `fetch` этого URL из popup, затем `chrome.identity.launchWebAuthFlow(auth_url)` — окно открывается сразу на Google,
+        без первого перехода на localhost внутри identity-flow. Параметр `prompt=select_account` для выбора аккаунта.
+      parameters:
+        - name: client
+          in: query
+          schema:
+            type: string
+            default: extension
+        - name: next
+          in: query
+          required: true
+          description: `chrome.identity.getRedirectURL(...)` — только `https://*.chromiumapp.org/*`.
+          schema:
+            type: string
+            format: uri
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExtensionAuthUrlResponse"
+        "400":
+          description: Недопустимый next
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
+  /api/auth/yandex/extension/authorize-url:
+    get:
+      tags: [auth]
+      summary: Прямой URL Yandex OAuth для расширения (как Web UI)
+      description: |
+        Как GET `/api/auth/yandex`, с `force_confirm=yes`, чтобы экран Яндекса показывался и можно было выбрать/подтвердить аккаунт.
+      parameters:
+        - name: client
+          in: query
+          schema:
+            type: string
+            default: extension
+        - name: next
+          in: query
+          required: true
+          schema:
+            type: string
+            format: uri
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExtensionAuthUrlResponse"
+        "400":
+          description: Недопустимый next
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+
   /api/auth/me:
     get:
       tags: [auth]
@@ -82,6 +150,57 @@ paths:
                 $ref: "#/components/schemas/UserMe"
         "401":
           description: Не авторизован
+
+  /api/auth/google/link/start:
+    get:
+      tags: [auth]
+      summary: URL авторизации Google для привязки к текущему аккаунту (C7.4)
+      description: |
+        Требуется Bearer JWT. После успеха провайдер перенаправляет на `/api/auth/google/link/callback`,
+        затем браузер попадает на Web UI `/settings?oauth_link=success`. Зарегистрируйте callback URI в консоли Google.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExtensionAuthUrlResponse"
+        "401":
+          description: Не авторизован
+
+  /api/auth/google/link/callback:
+    get:
+      tags: [auth]
+      summary: Callback OAuth привязки Google
+      responses:
+        "302":
+          description: Redirect на `/settings?oauth_link=success|error&…`
+
+  /api/auth/yandex/link/start:
+    get:
+      tags: [auth]
+      summary: URL авторизации Yandex для привязки к текущему аккаунту (C7.4)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExtensionAuthUrlResponse"
+        "401":
+          description: Не авторизован
+
+  /api/auth/yandex/link/callback:
+    get:
+      tags: [auth]
+      summary: Callback OAuth привязки Yandex
+      responses:
+        "302":
+          description: Redirect на `/settings?oauth_link=success|error&…`
 
   /api/auth/google/extension/start:
     get:
@@ -297,8 +416,7 @@ paths:
       operationId: authRefresh
       summary: Новый access JWT по refresh-токену сервиса
       description: |
-        Продление сессии **без** повторного OAuth провайдера. Контракт и модель — [docs/AUTH_AND_IDENTITY.md](docs/AUTH_AND_IDENTITY.md) §4;
-        дорожная карта реализации: [docs/ROADMAP.md](docs/ROADMAP.md) (C7.2). До внедрения маршрут в API может отсутствовать.
+        Продление сессии **без** повторного OAuth провайдера. Контракт и модель — [docs/AUTH_AND_IDENTITY.md](docs/AUTH_AND_IDENTITY.md) §4 (C7.2).
       requestBody:
         required: true
         content:
@@ -358,6 +476,13 @@ paths:
         - in: query
           name: limit
           schema: { type: integer, default: 50 }
+        - in: query
+          name: recording_session_id
+          schema:
+            type: string
+            format: uuid
+          required: false
+          description: Фильтр по §7 recording_session_id (цепочка автопродления)
       responses:
         "200":
           description: OK
@@ -391,7 +516,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Conversation"
+                $ref: "#/components/schemas/ConversationDetail"
         "404":
           description: Не найдено
     delete:
@@ -432,6 +557,56 @@ paths:
           description: Файл или JSON
         "404":
           description: Не найдено
+
+  /api/conversations/{conversation_id}/session-summary:
+    parameters:
+      - $ref: "#/components/parameters/ConversationId"
+    get:
+      tags: [conversations]
+      summary: Сводка LLM по цепочке записи (§7.6)
+      description: >
+        Один rolling Markdown-summary на всю сессию `recording_session_id` (автопродление).
+        Полезная нагрузка помимо этого ответа — также в S3 и в расширенном GET разговора.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Статус и текст сводки (если уже посчитана)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RecordingSessionSummary"
+        "404":
+          description: Не найдено
+
+  /api/conversations/{conversation_id}/session-summary/retry:
+    parameters:
+      - $ref: "#/components/parameters/ConversationId"
+    post:
+      tags: [conversations]
+      summary: Повторить генерацию сводки по цепочке (§7.6)
+      description: Ставит задачу `summarize_recording_session` в очередь Celery `llm` (после починки Ollama и т.п.).
+      security:
+        - bearerAuth: []
+      responses:
+        "202":
+          description: Задача принята
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [recording_session_id, status]
+                properties:
+                  recording_session_id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum: [queued]
+        "404":
+          description: Разговор не найден или сводки отключены
+        "503":
+          description: LLM-провайдер не настроен
 
   /api/conversations/{conversation_id}/audio:
     parameters:
@@ -712,20 +887,39 @@ paths:
         "501":
           description: Пока не реализовано (Phase A)
 
+  /api/settings/oauth-identities:
+    get:
+      tags: [settings]
+      summary: Привязанные OAuth-идентичности (C7.4)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/OAuthIdentity"
+        "401":
+          description: Не авторизован
+
   /ws/audio/{conversation_id}:
     get:
       tags: [websocket]
       summary: WebSocket — поток аудио (Upgrade)
       description: |
         Не обычный GET JSON. Установление соединения WebSocket на этот путь.
-        Аутентификация: query `access_token=<JWT>` или заголовок `Sec-WebSocket-Protocol` с элементом `bearer.<JWT>`.
+        Аутентификация: заголовок `Sec-WebSocket-Protocol` с элементом `bearer.<JWT>` (канон в prod).
+        Опционально query `access_token` только вне strict-режима (`VT_ENVIRONMENT=production` или `VT_WS_REQUIRE_SUBPROTOCOL`).
         См. docs/WEBSOCKET.md в репозитории.
       parameters:
         - $ref: "#/components/parameters/ConversationId"
         - name: access_token
           in: query
           required: false
-          description: Тот же JWT, что для REST Bearer (альтернатива subprotocol bearer.*)
+          description: JWT (dev / при VT_WS_ALLOW_QUERY_TOKEN); в production недоступен
           schema:
             type: string
       responses:
@@ -760,6 +954,7 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+      description: Альтернатива — заголовок `X-VT-Api-Key` (секрет из таблицы `user_api_keys`; см. scripts/issue_api_key.py).
 
   parameters:
     ConversationId:
@@ -788,6 +983,21 @@ components:
         status: { type: string }
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
+    OAuthIdentity:
+      type: object
+      required: [provider, subject_hint]
+      properties:
+        provider:
+          type: string
+          description: Имя провайдера (google, yandex, …)
+        provider_email:
+          type: string
+          nullable: true
+          description: Email снимка на момент привязки
+        subject_hint:
+          type: string
+          description: Маска стабильного субъекта провайдера (не полный `sub`)
+
     UserMe:
       type: object
       required: [id, email, provider]
@@ -834,15 +1044,14 @@ components:
 
     ExtensionFinalizeResponse:
       type: object
-      required: [access_token, user]
+      required: [access_token, refresh_token, user]
       properties:
         access_token:
           type: string
           description: Короткоживущий JWT для Authorization Bearer и WebSocket
         refresh_token:
           type: string
-          nullable: true
-          description: Долгоживущий токен сервиса для `/api/auth/refresh` (после C7.2; до реализации может отсутствовать в ответе)
+          description: Долгоживущий токен сервиса для `POST /api/auth/refresh` (ротируется при каждом refresh)
         user:
           $ref: "#/components/schemas/ExtensionOAuthUser"
 
@@ -856,15 +1065,14 @@ components:
 
     AuthRefreshResponse:
       type: object
-      required: [access_token]
+      required: [access_token, refresh_token]
       properties:
         access_token:
           type: string
           description: Новый JWT доступа
         refresh_token:
           type: string
-          nullable: true
-          description: Новый refresh при ротации на сервере; если null — использовать прежний refresh
+          description: Новый refresh-токен (ротация при каждом успешном вызове)
 
     ConversationCreate:
       type: object
@@ -875,22 +1083,43 @@ components:
         ttl_days:
           type: integer
           nullable: true
+        realtime_mode:
+          type: string
+          nullable: true
+          enum: [chunk, windowed]
+          description: Realtime режим клиента (опционально; валидируется по limits)
+        chunk_ms:
+          type: integer
+          nullable: true
+          description: Размер чанка в миллисекундах для realtime (опционально; валидируется по limits)
+        previous_conversation_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Продолжение цепочки §7; наследует recording_session_id
+        recording_session_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Явный recording_session_id для «головы» (редко; по умолчанию id нового разговора)
 
     Conversation:
       type: object
-      required: [id, user_id, s3_prefix, created_at, updated_at]
+      description: >
+        Conversation response. Для детального просмотра (GET /api/conversations/{id}) используется расширенная
+        схема `ConversationDetail` с полем `transcript` и метаданными активной версии.
+      required:
+        - id
+        - created_at
+        - updated_at
+        - recording_session_id
       properties:
         id:
-          type: string
-          format: uuid
-        user_id:
           type: string
           format: uuid
         title:
           type: string
           nullable: true
-        s3_prefix:
-          type: string
         created_at:
           type: string
           format: date-time
@@ -910,10 +1139,134 @@ components:
           format: uuid
           nullable: true
           description: Предыдущий разговор в цепочке
+        client_realtime_mode:
+          type: string
+          nullable: true
+          description: Realtime режим, переданный клиентом при создании (для UX/диагностики)
+        client_chunk_ms:
+          type: integer
+          nullable: true
+          description: Размер чанка, переданный клиентом при создании (для UX/диагностики)
         audio_object_ext:
           type: string
           description: Расширение исходного аудио в S3 (ключ audio.<ext>), например webm, mp3, wav
           default: webm
+        duration_seconds:
+          type: number
+          format: float
+          description: Длительность, рассчитанная по текущей отображаемой расшифровке (в секундах)
+          default: 0
+        language:
+          type: string
+          description: Язык для отображения (детект из transcript или preference пользователя)
+          default: auto
+        audio_uploaded_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: Когда аудио было загружено/финализировано на сервере
+
+    TranscriptSegment:
+      type: object
+      required: [speaker, start, end, text]
+      properties:
+        speaker:
+          type: string
+        start:
+          type: number
+          format: float
+        end:
+          type: number
+          format: float
+        text:
+          type: string
+
+    ConversationDetail:
+      allOf:
+        - $ref: "#/components/schemas/Conversation"
+        - type: object
+          properties:
+            transcript:
+              type: array
+              items:
+                $ref: "#/components/schemas/TranscriptSegment"
+            summary:
+              type: string
+              nullable: true
+            transcript_kind:
+              type: string
+              nullable: true
+            transcript_status:
+              type: string
+              nullable: true
+            transcript_revision:
+              type: integer
+              nullable: true
+            transcript_created_at:
+              type: string
+              format: date-time
+              nullable: true
+            transcript_finished_at:
+              type: string
+              format: date-time
+              nullable: true
+            diarization_performed_at:
+              type: string
+              format: date-time
+              nullable: true
+            diarization_started_at:
+              type: string
+              format: date-time
+              nullable: true
+            diarization_finished_at:
+              type: string
+              format: date-time
+              nullable: true
+            refetch_recommended:
+              type: boolean
+              description: Клиенту рекомендовано переполлить GET (ASR/diarization могут быть в flight)
+              default: false
+            diarization_status:
+              type: string
+              nullable: true
+            diarization_error:
+              type: string
+              nullable: true
+            diarization_enabled:
+              type: boolean
+              default: false
+            recording_session_summary_status:
+              type: string
+              nullable: true
+              description: §7.6 — статус rolling-summary цепочки (или null если выключено в конфиге)
+            recording_session_summary_updated_at:
+              type: string
+              format: date-time
+              nullable: true
+              description: Время последнего обновления rolling-summary
+
+    RecordingSessionSummary:
+      type: object
+      required:
+        - recording_session_id
+        - status
+      properties:
+        recording_session_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          description: disabled | pending | running | success | failed
+        summary_md:
+          type: string
+          nullable: true
+        error:
+          type: string
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
 
     ConversationList:
       type: object
@@ -971,6 +1324,11 @@ components:
         diarization_turn_level_retranscription_default:
           type: boolean
           description: Серверный дефолт (YAML/env) — повторный ASR на каждый turn при диаризации
+        llm_session_summary_enabled:
+          type: boolean
+          description: >
+            ТЗ §7.6 — включена ли генерация rolling-summary по цепочке (configs/llm.yaml /
+            VT_LLM_SESSION_SUMMARY_ENABLED)
         asr_vad_defaults:
           type: object
           nullable: true

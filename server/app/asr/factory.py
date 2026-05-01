@@ -29,12 +29,16 @@ ENGINE_PROVIDER_MAP = {
 }
 
 
-def _build_provider(engine_name: str, config_override: Optional[Dict[str, Any]] = None) -> ASRProvider:
+def build_asr_provider(
+    engine_name: str, config_override: Optional[Dict[str, Any]] = None
+) -> ASRProvider:
     """
-    Build an ASRProvider for the given engine name.
+    Собирает ASRProvider по имени движка.
 
-    Configuration is taken from `app_config.asr.providers[engine_name]` and
-    optionally overridden by `config_override`.
+    Конфиг из `app_config.asr.providers[engine_name]`; `config_override` — доп. поля.
+    Для движка, совпадающего с `app_config.asr.default_provider`, поле **model**
+    берётся из **`app_config.asr.recognition_model`** (configs/asr.yaml или `VT_ASR_MODEL`),
+    если оно задано — так задаётся текущая используемая модель.
     """
     engine_name = engine_name.lower()
     provider_cls = ENGINE_PROVIDER_MAP.get(engine_name)
@@ -44,17 +48,28 @@ def _build_provider(engine_name: str, config_override: Optional[Dict[str, Any]] 
     base_cfg = app_config.asr.providers.get(engine_name)
     cfg_dict: Dict[str, Any] = {}
     if base_cfg is not None:
-        # Convert dataclass to dict
         cfg_dict = {
             "enabled": base_cfg.enabled,
             "model": base_cfg.model,
             "impl": base_cfg.impl,
+            "model_path": base_cfg.model_path,
         }
+
+    default_name = (app_config.asr.default_provider or "").lower().strip()
+    if default_name and engine_name == default_name and app_config.asr.recognition_model:
+        cfg_dict["model"] = app_config.asr.recognition_model
 
     if config_override:
         cfg_dict.update(config_override)
 
     return provider_cls(cfg_dict)
+
+
+def _build_provider(
+    engine_name: str, config_override: Optional[Dict[str, Any]] = None
+) -> ASRProvider:
+    """Обратная совместимость; предпочтительно `build_asr_provider`."""
+    return build_asr_provider(engine_name, config_override=config_override)
 
 
 def create_asr_pipeline(

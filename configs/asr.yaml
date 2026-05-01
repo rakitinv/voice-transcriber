@@ -1,15 +1,22 @@
-# ASR providers configuration (skeleton)
-
+# ASR — выбор движка и модели (см. server/core/config.py, app/asr/factory.py).
+#
+# default_provider — какой ключ из `providers` использовать по умолчанию (Celery, realtime).
+# recognition_model — имя/тег модели для этого движка (активное значение; перекрывает
+#   providers.<default_provider>.model при сборке провайдера). Переопределение: env VT_ASR_MODEL.
+#
 default_provider: whisper
+recognition_model: medium
 
 providers:
   whisper:
     enabled: true
-    model: base
+    model: medium
   faster_whisper:
-    enabled: false
-    model: base
+    enabled: true
+    model: medium
   vosk:
-    enabled: false
+    enabled: true
     model: default
+    # Распакованная модель Vosk (en/small и т.д.); можно задать через env VOSK_MODEL_PATH
+    model_path: null
 

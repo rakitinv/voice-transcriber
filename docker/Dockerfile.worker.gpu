@@ -1,0 +1,51 @@
+# syntax=docker/dockerfile:1
+#
+# GPU worker image: same Debian base as CPU workers, plus CUDA runtime libraries
+# shipped as PyPI wheels (so we don't need a full CUDA base image).
+# Intended for `worker-final-gpu` service.
+#
+FROM python:3.11-slim
+
+ENV PIP_BREAK_SYSTEM_PACKAGES=1 \
+    PYTHONPATH="/app/server:$PYTHONPATH" \
+    LD_LIBRARY_PATH="/usr/local/lib/python3.11/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.11/site-packages/nvidia/cuda_runtime/lib:/usr/local/lib/python3.11/site-packages/nvidia/cuda_nvrtc/lib:/usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib:${LD_LIBRARY_PATH}"
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy project files
+COPY server/pyproject.toml server/poetry.lock* /app/server/
+COPY server/ /app/server/
+COPY configs/ /app/configs/
+
+WORKDIR /app/server
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip setuptools wheel
+
+# CUDA runtime libs needed by CTranslate2 GPU backend (libcublas, libcudart, cudnn).
+# These wheels bundle the corresponding .so files.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install \
+      nvidia-cublas-cu12 \
+      nvidia-cuda-runtime-cu12 \
+      nvidia-cudnn-cu12
+
+# Install Poetry and dependencies
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install poetry poetry-plugin-export
+
+RUN poetry config virtualenvs.create false
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    rm -f poetry.lock && \
+    poetry install --only main --no-interaction --no-ansi --no-root
+
+CMD ["python", "-m", "celery", "-A", "workers.celery_app.celery_app", "worker", "--loglevel=info", "--queues=asr_final"]
+

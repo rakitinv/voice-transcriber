@@ -1,0 +1,22 @@
+# Python / tooling caches
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+
+# Local virtualenvs (must never enter Docker build context)
+**/.venv/
+**/venv/
+**/env/
+
+# VCS / editor
+.git/
+.idea/
+.vscode/
+
+# Large / irrelevant artifacts for runtime images
+**/dist/
+**/node_modules/
+**/htmlcov/
+**/.coverage*

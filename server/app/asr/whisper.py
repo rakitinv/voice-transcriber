@@ -1,48 +1,45 @@
 """
-Whisper-based ASR provider stub.
-
-This module provides a concrete ASRProvider implementation wrapping a Whisper
-backend. The heavy lifting (model loading, audio decoding) is intentionally
-left unimplemented here; this stub focuses on wiring and interface shape.
+Whisper (конфиг `whisper`): inference через faster-whisper / CTranslate2.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from plugins.asr_base import ASRProvider, ASRSegment
 
+from .faster_engine import transcribe_bytes_to_text, transcribe_file_to_segments
+
 
 class WhisperASRProvider(ASRProvider):
-    """ASRProvider implementation backed by Whisper (stub)."""
-
-    def __init__(self, config: Dict[str, Any]):
-        super().__init__(config)
-        # TODO: Load Whisper model based on config["model"]
+    """Имя движка в конфиге — `whisper`; реализация — faster-whisper."""
 
     @property
     def name(self) -> str:
         return "whisper"
 
     def transcribe(
-        self, audio_path: str, language: Optional[str] = None
+        self,
+        audio_path: str,
+        language: Optional[str] = None,
+        *,
+        vad_preferences: Optional[dict] = None,
     ) -> List[ASRSegment]:
-        """
-        Transcribe an audio file using Whisper.
+        return transcribe_file_to_segments(
+            audio_path, self.config, language=language, vad_preferences=vad_preferences
+        )
 
-        NOTE:
-            This is a stub implementation; it must be extended with real
-            Whisper inference code (e.g. via openai/whisper or faster-whisper).
-        """
-        raise NotImplementedError("WhisperASRProvider.transcribe is not implemented yet")
-
-    def transcribe_chunk(self, audio_data: bytes, language: Optional[str] = None) -> str:
-        """
-        Transcribe a small audio chunk using Whisper.
-
-        NOTE:
-            This is a stub implementation; it must be extended with real
-            streaming / chunk handling logic.
-        """
-        raise NotImplementedError("WhisperASRProvider.transcribe_chunk is not implemented yet")
-
+    def transcribe_chunk(
+        self,
+        audio_data: bytes,
+        language: Optional[str] = None,
+        *,
+        vad_preferences: Optional[dict] = None,
+    ) -> str:
+        return transcribe_bytes_to_text(
+            audio_data,
+            self.config,
+            language=language,
+            suffix=".webm",
+            vad_preferences=vad_preferences,
+        )

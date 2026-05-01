@@ -4,6 +4,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useAuth, AUTH_QUERY_KEY } from "./hooks/useAuth";
 import { api } from "./api/client";
 import { Layout } from "./components/Layout";
+import { ToastHost } from "./components/ToastHost";
 import { LoginPage } from "./pages/LoginPage";
 import { ConversationsPage } from "./pages/ConversationsPage";
 import { ConversationViewerPage } from "./pages/ConversationViewerPage";
@@ -19,9 +20,12 @@ function LoginRedirect() {
     if (!hash.includes("access_token=")) return;
     const params = new URLSearchParams(hash.replace(/^#/, ""));
     const token = params.get("access_token");
+    const refresh = params.get("refresh_token");
     if (!token) return;
     window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
     localStorage.setItem("access_token", token);
+    if (refresh) localStorage.setItem("refresh_token", refresh);
+    else localStorage.removeItem("refresh_token");
     api.defaults.headers.common.Authorization = `Bearer ${token}`;
     void queryClient.invalidateQueries({ queryKey: AUTH_QUERY_KEY });
     navigate("/", { replace: true });
@@ -65,6 +69,7 @@ function AppRoutes() {
 export function App() {
   return (
     <BrowserRouter>
+      <ToastHost />
       <AppRoutes />
     </BrowserRouter>
   );

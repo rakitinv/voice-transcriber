@@ -16,5 +16,6 @@ export function loginWithYandex(): void {
 
 export function logout(): void {
   localStorage.removeItem("access_token");
+  localStorage.removeItem("refresh_token");
   delete api.defaults.headers.common.Authorization;
 }

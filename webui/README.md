@@ -2,11 +2,12 @@
 
 This directory contains the **React + Vite + TypeScript** frontend skeleton.
 
-### Planned responsibilities
+### Responsibilities (текущее и план)
 
 - OAuth2 login (Google / Yandex) via backend.
-- Conversation list, viewer, and search pages.
-- Realtime transcript viewer (WebSocket).
+- **Список разговоров:** просмотр, удаление, экспорт транскрипта, скачивание исходного аудио, **загрузка файла для обработки** (`POST /api/upload` — тот же контракт, что у будущего CLI `upload` и у `scripts/phase_a_upload_smoke.py`), а также **запись с микрофона** (MediaRecorder → по остановке тот же `POST /api/upload`, без realtime WS).
+- Страница просмотра разговора, поиск, настройки.
+- Realtime transcript viewer (WebSocket) — Phase B.
 - Settings for ASR / LLM providers, chunking, TTL, and limits.
 - Display of diarization, timestamps, and summaries.
 

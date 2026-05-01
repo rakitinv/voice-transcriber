@@ -1,0 +1,22 @@
+[Unit]
+Description=Voice Transcriber API + worker (Docker Compose)
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Directory with docker-compose.yml
+WorkingDirectory=/opt/voice-transcriber/docker
+
+# Optional: environment overrides (secrets, external URLs, etc.)
+EnvironmentFile=-/etc/voice-transcriber/voice-transcriber.env
+
+# Start only app services; assumes postgres/redis/minio are provided elsewhere OR via same compose already running.
+ExecStart=/usr/bin/docker compose up -d --build migrate api worker webui
+ExecStop=/usr/bin/docker compose stop api worker webui
+
+[Install]
+WantedBy=multi-user.target
+

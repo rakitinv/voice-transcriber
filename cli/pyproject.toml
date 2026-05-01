@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "voice-transcriber-cli"
+version = "0.1.0"
+description = "CLI for Voice Transcriber API: upload, conversations, export, audio download"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "httpx>=0.27",
+]
+
+[project.scripts]
+transcriber = "voice_transcriber_cli.main:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.4"]
+
+[tool.setuptools.packages.find]
+where = ["src"]

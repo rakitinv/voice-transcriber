@@ -1,4 +1,4 @@
-import { loadSettings, updateSettings } from "../settings/storage";
+import { loadSettings, updateSettings, type ExtensionSettings } from "../settings/storage";
 
 function base64UrlEncode(bytes: ArrayBuffer): string {
   const u8 = new Uint8Array(bytes);
@@ -7,7 +7,7 @@ function base64UrlEncode(bytes: ArrayBuffer): string {
   return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
-/** RFC 7636 PKCE pair for extension OAuth (C7.3). Exported for unit tests. */
+/** RFC 7636 PKCE pair. Exported for unit tests only (extension login uses Web UI–aligned OAuth). */
 export async function createPkcePair(): Promise<{ verifier: string; challenge: string }> {
   const verifierBytes = new Uint8Array(32);
   crypto.getRandomValues(verifierBytes);
@@ -52,29 +52,41 @@ export function parseOAuthRedirect(finalUrl: string): {
   }
 }
 
-/** Silent-step failures that should fall through to interactive OAuth without noisy UI. */
-function isBenignSilentOAuthError(oauthError: string | null, chromeError: string | undefined): boolean {
-  const blob = `${oauthError ?? ""} ${chromeError ?? ""}`.toLowerCase();
-  if (
-    blob.includes("login_required") ||
-    blob.includes("interaction_required") ||
-    blob.includes("consent_required") ||
-    blob.includes("account_selection_required") ||
-    blob.includes("invalid_grant") ||
-    blob.includes("access_denied")
-  ) {
-    return true;
+/**
+ * Service tokens returned by backend after Web OAuth when `client=extension`
+ * (fragment on `chrome.identity` redirect URL — same shape as Web UI `/login#`).
+ */
+export function parseServiceTokensFromOAuthRedirect(finalUrl: string): {
+  accessToken: string | null;
+  refreshToken: string | null;
+  error: string | null;
+  errorDescription: string | null;
+} {
+  try {
+    const u = new URL(finalUrl);
+    const hash = u.hash?.startsWith("#") ? u.hash.slice(1) : (u.hash ?? "");
+    const pick = (src: URLSearchParams, key: string) => {
+      const v = src.get(key);
+      return v && v.trim() ? v.trim() : null;
+    };
+    if (hash) {
+      const hp = new URLSearchParams(hash);
+      return {
+        accessToken: pick(hp, "access_token"),
+        refreshToken: pick(hp, "refresh_token"),
+        error: pick(hp, "error"),
+        errorDescription: pick(hp, "error_description"),
+      };
+    }
+    return {
+      accessToken: pick(u.searchParams, "access_token"),
+      refreshToken: pick(u.searchParams, "refresh_token"),
+      error: pick(u.searchParams, "error"),
+      errorDescription: pick(u.searchParams, "error_description"),
+    };
+  } catch {
+    return { accessToken: null, refreshToken: null, error: null, errorDescription: null };
   }
-  if (
-    blob.includes("authorization page could not be loaded") ||
-    blob.includes("redirect_uri_mismatch") ||
-    blob.includes("user did not approve") ||
-    blob.includes("canceled") ||
-    blob.includes("cancelled")
-  ) {
-    return true;
-  }
-  return false;
 }
 
 function launchWebAuthFlowAsync(url: string, interactive: boolean): Promise<{ responseUrl?: string; chromeError?: string }> {
@@ -90,55 +102,20 @@ function launchWebAuthFlowAsync(url: string, interactive: boolean): Promise<{ re
   });
 }
 
-async function fetchExtensionAuthorizeUrl(
-  base: string,
-  provider: "google" | "yandex",
-  redirectUri: string,
-  codeChallenge: string,
-  uxMode: "silent" | "interactive",
-  accountPrompt: "normal" | "force"
-): Promise<string> {
-  const params = new URLSearchParams({
-    redirect_uri: redirectUri,
-    code_challenge: codeChallenge,
-    code_challenge_method: "S256",
-    ux_mode: uxMode,
-    account_prompt: accountPrompt,
+async function tryRefreshViaApi(
+  serverUrl: string,
+  refreshToken: string
+): Promise<{ accessToken: string; refreshToken: string } | null> {
+  const base = serverUrl.replace(/\/+$/, "");
+  const res = await fetch(`${base}/api/auth/refresh`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ refresh_token: refreshToken }),
   });
-  const url = `${base}/api/auth/${provider}/extension/start?${params.toString()}`;
-  const res = await fetch(url);
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`extension/start failed: ${res.status} ${text}`);
-  }
-  const data = (await res.json()) as { auth_url?: string };
-  const authUrl = data.auth_url;
-  if (!authUrl) throw new Error("extension/start missing auth_url");
-  return authUrl;
-}
-
-async function finalizeExtensionLogin(
-  base: string,
-  provider: "google" | "yandex",
-  code: string,
-  codeVerifier: string,
-  state: string
-): Promise<void> {
-  const qs = new URLSearchParams({
-    code,
-    code_verifier: codeVerifier,
-    state,
-  }).toString();
-  const finalizeUrl = `${base}/api/auth/${provider}/extension/finalize?${qs}`;
-  const finRes = await fetch(finalizeUrl, { method: "POST" });
-  if (!finRes.ok) {
-    const text = await finRes.text().catch(() => "");
-    throw new Error(`Finalize failed: ${finRes.status} ${text}`);
-  }
-  const data = (await finRes.json()) as { access_token?: string };
-  const token = data.access_token;
-  if (!token) throw new Error("Finalize did not return access_token");
-  await updateSettings({ accessToken: token });
+  if (!res.ok) return null;
+  const data = (await res.json()) as { access_token?: string; refresh_token?: string };
+  if (!data.access_token || !data.refresh_token) return null;
+  return { accessToken: data.access_token, refreshToken: data.refresh_token };
 }
 
 export type BackendSessionVerifyResult =
@@ -166,101 +143,143 @@ export async function verifyBackendSession(serverUrl: string, token: string): Pr
   }
 }
 
-async function runExtensionOAuthAttempt(
+export type ExtensionSessionResult =
+  | { status: "ok"; settings: ExtensionSettings }
+  | { status: "unauthorized" }
+  | { status: "network" };
+
+/** Clears service tokens (local); next API calls require signing in again. */
+export async function clearExtensionAuth(): Promise<ExtensionSettings> {
+  return updateSettings({ accessToken: null, refreshToken: null });
+}
+
+export async function verifyOrRefreshSession(settings: ExtensionSettings): Promise<ExtensionSessionResult> {
+  const token = (settings.accessToken ?? "").trim();
+  const rt = (settings.refreshToken ?? "").trim();
+
+  if (!token) {
+    if (rt) {
+      const pair = await tryRefreshViaApi(settings.serverUrl, rt);
+      if (pair) {
+        const next = await updateSettings({
+          accessToken: pair.accessToken,
+          refreshToken: pair.refreshToken,
+        });
+        const v = await verifyBackendSession(next.serverUrl, pair.accessToken);
+        if (v.status === "ok") return { status: "ok", settings: next };
+      }
+    }
+    return { status: "unauthorized" };
+  }
+
+  const v = await verifyBackendSession(settings.serverUrl, token);
+  if (v.status === "ok") return { status: "ok", settings };
+  if (v.status === "unauthorized" && rt) {
+    const pair = await tryRefreshViaApi(settings.serverUrl, rt);
+    if (pair) {
+      const next = await updateSettings({
+        accessToken: pair.accessToken,
+        refreshToken: pair.refreshToken,
+      });
+      const v2 = await verifyBackendSession(next.serverUrl, pair.accessToken);
+      if (v2.status === "ok") return { status: "ok", settings: next };
+    }
+    await updateSettings({ accessToken: null, refreshToken: null });
+    return { status: "unauthorized" };
+  }
+  if (v.status === "unauthorized") {
+    await updateSettings({ accessToken: null, refreshToken: null });
+    return { status: "unauthorized" };
+  }
+  return { status: "network" };
+}
+
+/** Persisted so popup/side panel can show busy state after reopen while OAuth runs in the service worker. */
+export const OAUTH_FLOW_STORAGE_KEY = "voiceTranscriberOAuthFlow";
+
+export type OAuthFlowSnap = { pending: boolean; lastError: string | null };
+
+export async function readOAuthFlowSnap(): Promise<OAuthFlowSnap | null> {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([OAUTH_FLOW_STORAGE_KEY], (result) => {
+      const raw = result[OAUTH_FLOW_STORAGE_KEY];
+      if (!raw || typeof raw !== "object") resolve(null);
+      else resolve(raw as OAuthFlowSnap);
+    });
+  });
+}
+
+export async function writeOAuthFlowSnap(snap: OAuthFlowSnap): Promise<void> {
+  return new Promise((resolve, reject) => {
+    chrome.storage.local.set({ [OAUTH_FLOW_STORAGE_KEY]: snap }, () => {
+      const err = chrome.runtime.lastError;
+      if (err) reject(new Error(err.message));
+      else resolve();
+    });
+  });
+}
+
+async function fetchWebAlignedExtensionAuthorizeUrl(
   base: string,
   provider: "google" | "yandex",
-  redirectUri: string,
-  uxMode: "silent" | "interactive",
-  accountPrompt: "normal" | "force"
-): Promise<void> {
-  const { verifier, challenge } = await createPkcePair();
-  const authUrl = await fetchExtensionAuthorizeUrl(base, provider, redirectUri, challenge, uxMode, accountPrompt);
-  const interactive = uxMode !== "silent";
-  const { responseUrl, chromeError } = await launchWebAuthFlowAsync(authUrl, interactive);
-  if (chromeError) {
-    throw new Error(chromeError);
+  redirectUri: string
+): Promise<string> {
+  const qs = new URLSearchParams({ client: "extension", next: redirectUri });
+  const url = `${base}/api/auth/${provider}/extension/authorize-url?${qs.toString()}`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`authorize-url failed: ${res.status} ${text}`);
   }
-  if (!responseUrl) {
-    throw new Error("OAuth failed: no redirect URL");
-  }
-  const parsed = parseOAuthRedirect(responseUrl);
-  if (parsed.error && !parsed.code) {
-    throw new Error(
-      parsed.errorDescription ? `${parsed.error}: ${parsed.errorDescription}` : `OAuth error: ${parsed.error}`
-    );
-  }
-  if (!parsed.code || !parsed.state) {
-    throw new Error("OAuth completed but authorization code or state is missing");
-  }
-  await finalizeExtensionLogin(base, provider, parsed.code, verifier, parsed.state);
+  const data = (await res.json()) as { auth_url?: string };
+  const authUrl = data.auth_url;
+  if (!authUrl) throw new Error("authorize-url missing auth_url");
+  return authUrl;
 }
 
 /**
- * OAuth2 login for the extension (B2.0 hybrid + C7.3 PKCE):
- * 1) optional silent attempt via server-built authorize URL;
- * 2) interactive fallback.
- * Shift+click (`force: true`) skips (1) and uses interactive flow with stronger account-picker hints.
+ * OAuth как у Web UI (`redirect_uri` = `/api/auth/{provider}/callback`), финальный редирект на `*.chromiumapp.org` с токенами.
+ * Вызывайте из **service worker** (`background`), чтобы `launchWebAuthFlow` не обрывался при закрытии popup.
  */
-export function startOAuthLogin(
+export async function runOAuthLoginAsync(
   serverUrl: string,
-  provider: "google" | "yandex",
-  onDone?: (err: string | null) => void,
-  opts?: { force?: boolean }
-): void {
+  provider: "google" | "yandex"
+): Promise<{ ok: true } | { ok: false; error: string }> {
   const base = serverUrl.replace(/\/+$/, "");
   const redirectUri = chrome.identity.getRedirectURL("oauth2");
-  const forcePicker = opts?.force === true;
+  try {
+    const authUrl = await fetchWebAlignedExtensionAuthorizeUrl(base, provider, redirectUri);
+    const { responseUrl, chromeError } = await launchWebAuthFlowAsync(authUrl, true);
+    if (chromeError) throw new Error(chromeError);
+    if (!responseUrl) throw new Error("OAuth cancelled or no redirect URL");
 
-  (async () => {
-    if (!forcePicker) {
-      const current = await loadSettings();
-      const token = (current.accessToken ?? "").trim();
-      if (token) {
-        const v = await verifyBackendSession(base, token);
-        if (v.status === "ok") {
-          onDone?.(null);
-          return;
-        }
-        if (v.status === "unauthorized") {
-          await updateSettings({ accessToken: null });
-        }
-      }
+    const parsed = parseServiceTokensFromOAuthRedirect(responseUrl);
+    if (parsed.error) {
+      throw new Error(
+        parsed.errorDescription ? `${parsed.error}: ${parsed.errorDescription}` : `OAuth error: ${parsed.error}`
+      );
     }
-
-    try {
-      if (forcePicker) {
-        await runExtensionOAuthAttempt(base, provider, redirectUri, "interactive", "force");
-        onDone?.(null);
-        return;
-      }
-
-      try {
-        await runExtensionOAuthAttempt(base, provider, redirectUri, "silent", "normal");
-        onDone?.(null);
-        return;
-      } catch (silentErr) {
-        const msg = silentErr instanceof Error ? silentErr.message : String(silentErr);
-        if (!isBenignSilentOAuthError(msg, undefined)) {
-          console.info("[oauth] Silent step note (continuing with interactive):", msg);
-        }
-      }
-
-      await runExtensionOAuthAttempt(base, provider, redirectUri, "interactive", "normal");
-      onDone?.(null);
-    } catch (e) {
-      console.error("OAuth error:", e);
-      onDone?.(e instanceof Error ? e.message : String(e));
+    if (!parsed.accessToken || !parsed.refreshToken) {
+      throw new Error("OAuth completed but access_token or refresh_token is missing");
     }
-  })().catch((e) => {
-    console.error("OAuth start error:", e);
-    onDone?.(e instanceof Error ? e.message : String(e));
-  });
+    await updateSettings({ accessToken: parsed.accessToken, refreshToken: parsed.refreshToken });
+    return { ok: true };
+  } catch (e) {
+    console.error("OAuth error:", e);
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 export function registerOAuthMessageListener(): void {
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === "oauth_token" && typeof message.accessToken === "string") {
-      void updateSettings({ accessToken: message.accessToken }).then(() => {
+      void updateSettings({
+        accessToken: message.accessToken,
+        refreshToken:
+          typeof message.refreshToken === "string" && message.refreshToken.trim()
+            ? message.refreshToken.trim()
+            : null,
+      }).then(() => {
         sendResponse({ ok: true });
       });
       return true;

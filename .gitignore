@@ -1,0 +1,28 @@
+.DS_Store
+Thumbs.db
+
+# Logs / temp artifacts
+*.log
+_tmp_*.log
+terminal_output_*.txt
+naive_*.txt
+
+# Env files (keep examples if any)
+docker/.env
+.env
+.env.*
+
+# Node / frontend build artifacts
+node_modules/
+**/node_modules/
+browser-extension/dist/
+webui/dist/
+
+# Python virtual envs / caches (repo-root convenience)
+.venv/
+venv/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+

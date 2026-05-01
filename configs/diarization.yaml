@@ -1,0 +1,33 @@
+# Diarization (speaker separation) post-processing configuration.
+#
+# If enabled, diarization can be automatically queued after batch ASR and can be
+# manually re-run via POST /api/conversations/{id}/diarize.
+#
+# CPU vs CUDA *PyTorch wheels* are chosen at Docker image build time (compose build args),
+# not in this file. Runtime `device` below selects how inference uses the installed stack.
+# See docker/README.md → «Diarization: CPU vs CUDA images».
+
+enabled: true
+default_provider: pyannote
+
+# When false (recommended if full-file ASR quality is already good): diarization only assigns
+# speakers to existing ASR segments. When true: re-run ASR on each pyannote turn (may change text).
+# Override per user in Web UI (Settings). Env: VT_DIARIZATION_TURN_LEVEL_RETRANSCRIPTION=true|false
+turn_level_retranscription: false
+
+providers:
+  pyannote:
+    enabled: true
+    # impl can override the built-in mapping (optional)
+    impl: null
+    model: pyannote/speaker-diarization-3.1
+    device: auto  # cpu|cuda|auto
+    hf_token_env: VT_HF_TOKEN
+    # If true: no network access; models must be available in cache_dir.
+    offline_models: false
+    # Optional directory to store/read HuggingFace/pyannote caches (recommended in Docker).
+    model_cache_dir: /models
+    num_speakers: null
+    min_speakers: null
+    max_speakers: null
+

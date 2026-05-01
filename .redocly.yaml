@@ -1,0 +1,19 @@
+# Конфигурация @redocly/cli для `openapi.yaml`.
+# По мере доработки спецификации можно включать правила из `recommended`.
+
+extends:
+  - recommended
+
+rules:
+  # Публичные OAuth-redirect и /settings/limits без JWT
+  security-defined: off
+  # Добавим при полном описании всех операций
+  operation-operationId: off
+  operation-2xx-response: warn
+  operation-4xx-response: warn
+  info-license: off
+  no-server-example.com: off
+
+apis:
+  main:
+    root: openapi.yaml

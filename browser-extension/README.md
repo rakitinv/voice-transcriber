@@ -1,26 +1,26 @@
-## Browser Extension Skeleton (`browser-extension/`)
+## Browser extension (`browser-extension/`)
 
-This directory contains the **Chromium browser extension** skeleton for realtime recording and transcription.
+Chromium (MV3) extension: **shell popup** (login, settings, open side panel, upload window), **side panel** (start/stop recording, live transcript, export), **offscreen** document for microphone capture, **background** service worker (OAuth routing, context menus, session persist).
 
-### Planned responsibilities
+Канон UX: [`docs/BROWSER_EXTENSION_UI.md`](../docs/BROWSER_EXTENSION_UI.md). Приёмка Phase B: [`docs/PHASE_B_ACCEPTANCE.md`](../docs/PHASE_B_ACCEPTANCE.md).
 
-- Start / stop recording.
-- Live transcript display (via backend WebSocket).
-- Transcript download and LLM summary trigger.
-- Settings panel:
-  - Server URL and OAuth login flow.
-  - Audio source selection (microphone, tab audio, system audio).
-  - Chunk size and realtime mode selection.
-  - Language mode (manual / auto-detect).
-  - TTL and max conversation duration.
+Параметры **diarization** (в т.ч. повторный ASR по turn vs только спикеры) и **повторный batch ASR** по разговору настраиваются и запускаются из **Web UI** сервера, не из расширения; см. [DIARIZATION_ALIGNMENT_VERSIONING.md](../docs/DIARIZATION_ALIGNMENT_VERSIONING.md) и §10 ТЗ.
 
-### Planned layout
+### Commands
 
-- `src/`
-  - `background/` – Background service worker, connection to backend.
-  - `content/` – Optional content scripts (e.g. UI overlays).
-  - `popup/` – Popup UI for recording and settings.
-  - `types/` – Shared types.
+```bash
+npm ci
+npm run build    # production bundle → dist/
+npm run test     # Vitest unit tests (no browser)
+npm run dev      # Vite dev server
+```
 
-Only manifest and structural stubs should be placed here at this stage.
+Load **unpacked** extension from `browser-extension/dist/` in `chrome://extensions` (Developer mode).
 
+### Layout (`src/`)
+
+- `background.ts` — conversations API from SW, offscreen start/stop, `chrome.contextMenus`, `tabs` / `windows` lifecycle.
+- `popup/` — shell UI (`App` `variant="shell"`) and shared `App` for recording mode.
+- `sidepanel/` — entry that mounts `App` with `layout="sidepanel"` (recording UI).
+- `offscreen/`, `upload/` — separate extension pages.
+- `recorder/`, `websocket/`, `api/`, `auth/`, `settings/`, `recording/` — shared modules.

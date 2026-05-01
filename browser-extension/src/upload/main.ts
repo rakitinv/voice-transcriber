@@ -18,7 +18,7 @@ async function main(): Promise<void> {
   input.addEventListener("change", async () => {
     const file = input.files?.[0];
     if (!file) return;
-    log(logEl, "Checking session…");
+    log(logEl, "Проверка сессии…");
     try {
       let settings = await loadSettings();
       const session = await verifyOrRefreshSession(settings);
@@ -26,8 +26,8 @@ async function main(): Promise<void> {
         log(
           logEl,
           session.status === "unauthorized"
-            ? "Session expired — log in again from the extension popup."
-            : "Could not reach API. Check Server URL in extension settings.",
+            ? "Сессия истекла — войдите снова через всплывающее окно расширения."
+            : "Не удалось связаться с API. Проверьте URL сервера в настройках расширения.",
           "err"
         );
         return;
@@ -35,14 +35,14 @@ async function main(): Promise<void> {
       settings = session.settings;
       const token = (settings.accessToken ?? "").trim();
       if (!token) {
-        log(logEl, "Not signed in. Open the extension popup and log in, then try again.", "err");
+        log(logEl, "Вы не вошли. Откройте всплывающее окно расширения, выполните вход и повторите.", "err");
         return;
       }
-      log(logEl, "Uploading…");
+      log(logEl, "Загрузка…");
       const res = await postUploadAudio(settings, file, conversationId);
       log(
         logEl,
-        `Done.\nconversation_id: ${res.conversation_id}` +
+        `Готово.\nconversation_id: ${res.conversation_id}` +
           (res.audio_object_ext ? `\naudio_object_ext: ${res.audio_object_ext}` : ""),
         "ok"
       );

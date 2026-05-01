@@ -22,23 +22,23 @@ export function Layout() {
     <div className={styles.layout}>
       <header className={styles.header}>
         <Link to="/" className={styles.logo}>
-          Voice Transcriber
+          Voice transcriber
         </Link>
         <nav className={styles.nav}>
           <NavLink to="/" end className={({ isActive }) => (isActive ? styles.active : "")}>
-            Conversations
+            Разговоры
           </NavLink>
           <NavLink to="/search" className={({ isActive }) => (isActive ? styles.active : "")}>
-            Search
+            Поиск
           </NavLink>
           <NavLink to="/settings" className={({ isActive }) => (isActive ? styles.active : "")}>
-            Settings
+            Настройки
           </NavLink>
         </nav>
         <div className={styles.user}>
-          <span className={styles.userName}>{user?.name ?? user?.email ?? "User"}</span>
+          <span className={styles.userName}>{user?.name ?? user?.email ?? "Пользователь"}</span>
           <button type="button" onClick={handleLogout} className={styles.logout}>
-            Log out
+            Выйти
           </button>
         </div>
       </header>

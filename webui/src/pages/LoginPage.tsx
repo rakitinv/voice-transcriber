@@ -6,14 +6,14 @@ export function LoginPage() {
   return (
     <div className={styles.page}>
       <div className={styles.card}>
-        <h1 className={styles.title}>Voice Transcriber</h1>
-        <p className={styles.subtitle}>Sign in to manage your transcription conversations</p>
+        <h1 className={styles.title}>Voice transcriber</h1>
+        <p className={styles.subtitle}>Войдите, чтобы управлять записями и расшифровками</p>
         <div className={styles.actions}>
           <Button variant="primary" onClick={loginWithGoogle} className={styles.btn}>
-            Sign in with Google
+            Войти через Google
           </Button>
           <Button variant="secondary" onClick={loginWithYandex} className={styles.btn}>
-            Sign in with Yandex
+            Войти через Яндекс
           </Button>
         </div>
       </div>

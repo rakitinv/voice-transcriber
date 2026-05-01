@@ -15,7 +15,7 @@ interface ConversationsListProps {
 function formatDate(dateStr: string): string {
   try {
     // Use toLocaleString: toLocaleDateString doesn't support timeStyle in all browsers.
-    return new Date(dateStr).toLocaleString(undefined, {
+    return new Date(dateStr).toLocaleString("ru-RU", {
       dateStyle: "medium",
       timeStyle: "short",
     });
@@ -42,7 +42,7 @@ export function ConversationsList({
   if (!conversations.length) {
     return (
       <div className={styles.empty}>
-        <p>No conversations yet.</p>
+        <p>Пока нет разговоров.</p>
       </div>
     );
   }
@@ -58,7 +58,7 @@ export function ConversationsList({
           </div>
           <div className={styles.actions}>
             <Link to={`/conversations/${c.id}`}>
-              <Button variant="secondary">View</Button>
+              <Button variant="secondary">Открыть</Button>
             </Link>
             <RecordingDownloadIconButton
               onClick={() => onDownloadOriginal(c.id, c.audioObjectExt)}
@@ -67,14 +67,14 @@ export function ConversationsList({
               variant="ghost"
               onClick={() => onDownload(c.id)}
             >
-              Download
+              Скачать
             </Button>
             <Button
               variant="danger"
               onClick={() => onDelete(c.id)}
               disabled={isDeletingId === c.id}
             >
-              {isDeletingId === c.id ? "Deleting…" : "Delete"}
+              {isDeletingId === c.id ? "Удаление…" : "Удалить"}
             </Button>
           </div>
         </li>

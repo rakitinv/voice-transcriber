@@ -206,7 +206,7 @@ export class AudioRecorderController {
     const res = await fetch(url.toString(), { method: "POST", headers, body: form });
     if (!res.ok) {
       const text = await res.text().catch(() => "");
-      throw new Error(`Upload failed: ${res.status} ${text}`);
+      throw new Error(`Загрузка не удалась: ${res.status} ${text}`);
     }
   }
 
@@ -244,13 +244,13 @@ export class AudioRecorderController {
         const msg = e instanceof Error ? e.message : String(e);
         if (name === "NotAllowedError" || /Permission dismissed/i.test(msg)) {
           throw new Error(
-            "Microphone permission was denied/dismissed. Click Start Recording again and allow microphone access for the extension popup. " +
-              "If Chrome does not show a prompt, open chrome://settings/content/siteDetails?site=chrome-extension://" +
+            "Доступ к микрофону запрещён или закрыт. Нажмите «Начать запись» снова и разрешите микрофон для всплывающего окна расширения. " +
+              "Если Chrome не показывает запрос, откройте chrome://settings/content/siteDetails?site=chrome-extension://" +
               chrome.runtime.id +
-              " and set Microphone to Allow."
+              " и установите для микрофона «Разрешить»."
           );
         }
-        throw new Error(`Microphone error: ${msg}`);
+        throw new Error(`Ошибка микрофона: ${msg}`);
       }
     }
 
@@ -260,18 +260,18 @@ export class AudioRecorderController {
       // Tab capture
       return new Promise<MediaStream>((resolve, reject) => {
         if (!chrome.tabCapture) {
-          reject(new Error("tabCapture API not available"));
+          reject(new Error("API tabCapture недоступен"));
           return;
         }
         chrome.tabCapture.capture({ audio: true, video: false }, (stream) => {
           if (chrome.runtime.lastError) {
-            reject(new Error(chrome.runtime.lastError.message ?? "tabCapture failed"));
+            reject(new Error(chrome.runtime.lastError.message ?? "Ошибка tabCapture"));
             return;
           }
           if (!stream) {
             reject(
               new Error(
-                "Failed to capture tab audio (often: permission dismissed, or the active tab has no capturable audio). Try again on a normal webpage tab with audio playing, or switch Audio source to Microphone."
+                "Не удалось захватить звук вкладки (часто: доступ закрыт или у активной вкладки нет звука для захвата). Повторите на обычной странице со звуком или выберите источник «Микрофон»."
               )
             );
           } else {
@@ -282,7 +282,7 @@ export class AudioRecorderController {
     }
 
     // System audio capture is browser/OS dependent; left as a placeholder.
-    throw new Error("System audio capture not implemented");
+    throw new Error("Захват системного звука не реализован");
   }
 }
 

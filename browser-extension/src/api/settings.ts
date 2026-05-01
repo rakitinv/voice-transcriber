@@ -21,7 +21,7 @@ export async function getUserSettings(
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`Settings fetch failed: ${res.status} ${text}`.trim());
+    throw new Error(`Не удалось загрузить настройки: ${res.status} ${text}`.trim());
   }
   return (await res.json()) as UserSettings;
 }

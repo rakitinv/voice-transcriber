@@ -74,7 +74,7 @@ export function ConversationsPage() {
   return (
     <div className={styles.page}>
       <div className={styles.toolbar}>
-        <h1 className={styles.title}>Conversations</h1>
+        <h1 className={styles.title}>Разговоры</h1>
         <div className={styles.toolbarActions}>
           <input
             ref={fileInputRef}
@@ -89,7 +89,7 @@ export function ConversationsPage() {
             onClick={handlePickFile}
             disabled={disableFilePick}
           >
-            {uploadBusy ? "Uploading…" : "Upload audio"}
+            {uploadBusy ? "Загрузка…" : "Загрузить аудио"}
           </Button>
           {!isRecording ? (
             <Button
@@ -97,33 +97,33 @@ export function ConversationsPage() {
               onClick={() => void handleStartMic()}
               disabled={uploadBusy}
             >
-              Record from microphone
+              Запись с микрофона
             </Button>
           ) : (
             <>
-              <span className={styles.recordingLabel}>Recording…</span>
+              <span className={styles.recordingLabel}>Идёт запись…</span>
               <Button
                 variant="danger"
                 onClick={() => void handleStopMicAndUpload()}
                 disabled={uploadBusy}
               >
-                Stop & upload
+                Остановить и отправить
               </Button>
               <Button
                 variant="ghost"
                 onClick={discardRecording}
                 disabled={uploadBusy}
               >
-                Cancel
+                Отмена
               </Button>
             </>
           )}
         </div>
       </div>
-      {isLoading && <p className={styles.status}>Loading…</p>}
+      {isLoading && <p className={styles.status}>Загрузка…</p>}
       {isError && (
         <p className={styles.error}>
-          {error instanceof Error ? error.message : "Failed to load conversations."}
+          {error instanceof Error ? error.message : "Не удалось загрузить список разговоров."}
         </p>
       )}
       {!isLoading && !isError && (

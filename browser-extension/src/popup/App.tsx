@@ -255,14 +255,14 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
     if (r.status === "unauthorized") {
       setSessionOk(false);
       setSettings(await loadSettings());
-      setError("Session expired or token invalid — please login again.");
+      setError("Сессия истекла или токен недействителен — войдите снова.");
       return false;
     }
     /* network: /auth/me timeout, 5xx, or fetch failure — tokens usually unchanged */
     const hasToken = !!(latest.accessToken ?? "").trim();
     setSessionOk(hasToken);
     setError(
-      "Server is slow or unreachable while checking your session (the API may be busy). You may still be signed in — retry shortly. If this persists, check Server URL and that the API is running."
+      "Сервер медленно отвечает или недоступен при проверке сессии (API может быть занят). Вы всё ещё можете быть авторизованы — повторите через несколько секунд. Если не проходит, проверьте URL сервера и что API запущен."
     );
     return false;
   }, []);
@@ -284,7 +284,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
 
   const pollServerTranscriptAfterStop = useCallback(
     async (s: ExtensionSettings, cid: string, signal: AbortSignal) => {
-      setUploadInfo("Loading full transcript from server…");
+      setUploadInfo("Загрузка полной расшифровки с сервера…");
       const ok = await refreshSession(s);
       if (!ok || signal.aborted) {
         if (!signal.aborted) setUploadInfo(null);
@@ -337,7 +337,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
         }
       }
       if (!signal.aborted) {
-        setUploadInfo("Full transcript not ready yet — use Refresh from server.");
+        setUploadInfo("Полная расшифровка ещё не готова — нажмите «Обновить с сервера».");
       }
     },
     [refreshSession]
@@ -508,16 +508,16 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
 
     chrome.runtime.sendMessage({ type: "create_conversation_for_recording" }, async (response) => {
       if (chrome.runtime.lastError) {
-        setError(chrome.runtime.lastError.message ?? "Failed to start recording");
+        setError(chrome.runtime.lastError.message ?? "Не удалось начать запись");
         return;
       }
       if (!response?.ok) {
-        setError(response?.error ?? "Failed to start recording");
+        setError(response?.error ?? "Не удалось начать запись");
         return;
       }
       const newConversationId = response.conversationId as string | undefined;
       if (!newConversationId) {
-        setError("Backend did not return conversation id");
+        setError("Сервер не вернул идентификатор разговора");
         return;
       }
 
@@ -525,7 +525,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
         setConversationId(newConversationId);
         if (settings.audioSource === "microphone") {
           const win = await chrome.windows.getCurrent();
-          if (win.id == null) throw new Error("Could not determine browser window for recording session");
+          if (win.id == null) throw new Error("Не удалось определить окно браузера для сессии записи");
           await new Promise<void>((resolve, reject) => {
             chrome.runtime.sendMessage(
               {
@@ -536,11 +536,11 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
               },
               (resp) => {
                 if (chrome.runtime.lastError) {
-                  reject(new Error(chrome.runtime.lastError.message ?? "Background error"));
+                  reject(new Error(chrome.runtime.lastError.message ?? "Ошибка фонового сценария"));
                   return;
                 }
                 if (!resp?.ok) {
-                  reject(new Error(resp?.error ?? "Failed to start offscreen recording"));
+                  reject(new Error(resp?.error ?? "Не удалось начать фоновую запись"));
                   return;
                 }
                 resolve();
@@ -569,7 +569,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
           });
           recordingSurfaceRef.current = "popup";
           const win = await chrome.windows.getCurrent();
-          if (win.id == null) throw new Error("Could not determine browser window");
+          if (win.id == null) throw new Error("Не удалось определить окно браузера");
           let capturedTabId: number | undefined;
           if (settings.audioSource === "tab" || settings.audioSource === "dual") {
             const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -591,11 +591,11 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
               },
               (resp) => {
                 if (chrome.runtime.lastError) {
-                  reject(new Error(chrome.runtime.lastError.message ?? "Background error"));
+                  reject(new Error(chrome.runtime.lastError.message ?? "Ошибка фонового сценария"));
                   return;
                 }
                 if (!resp?.ok) {
-                  reject(new Error(resp?.error ?? "Failed to register recording session"));
+                  reject(new Error(resp?.error ?? "Не удалось зарегистрировать сессию записи"));
                   return;
                 }
                 resolve();
@@ -640,11 +640,11 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
         await new Promise<void>((resolve, reject) => {
           chrome.runtime.sendMessage({ type: "bg_stop_offscreen_recording" }, (resp) => {
             if (chrome.runtime.lastError) {
-              reject(new Error(chrome.runtime.lastError.message ?? "Background error"));
+              reject(new Error(chrome.runtime.lastError.message ?? "Ошибка фонового сценария"));
               return;
             }
             if (!resp?.ok) {
-              reject(new Error(resp?.error ?? "Failed to stop recording"));
+              reject(new Error(resp?.error ?? "Не удалось остановить запись"));
               return;
             }
             resolve();
@@ -729,7 +729,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
         setTranscriptLines(segs.map((s) => ({ id: crypto.randomUUID(), text: s.text })));
       } else {
         setTranscriptLines([]);
-        setUploadInfo("Server transcript has no segments yet (ASR may still be processing).");
+        setUploadInfo("На сервере пока нет сегментов расшифровки (ASR может ещё обрабатывать).");
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -751,7 +751,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
       try {
         const data = await postUploadAudio(settings, file, uiMode === "recording" ? conversationId : null);
         if (uiMode === "shell") {
-          setUploadInfo(`Uploaded. Conversation id: ${data.conversation_id}`);
+          setUploadInfo(`Загружено. Идентификатор разговора: ${data.conversation_id}`);
         } else {
           setConversationId(data.conversation_id);
         }
@@ -765,7 +765,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
   const handleGenerateSummary = () => {
     // Summary generation is handled by backend (LLM task) once conversation is uploaded.
     // Here we could call an API endpoint to trigger it; left as a placeholder.
-    alert("Summary generation is triggered on the backend (not implemented in popup).");
+    alert("Генерация сводки запускается на сервере (во всплывающем окне не реализовано).");
   };
 
   const updateLocalSettings = async (partial: Partial<ExtensionSettings>) => {
@@ -813,26 +813,26 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
       const r = resp as { ok?: boolean; error?: string } | undefined;
       if (r?.ok === false) {
         setOauthBusy(false);
-        setError(r.error ?? "Could not start sign-in.");
+        setError(r.error ?? "Не удалось начать вход.");
       }
     });
   };
 
   if (!settings) {
-    return <div style={{ padding: 12 }}>Loading settings…</div>;
+    return <div style={{ padding: 12 }}>Загрузка настроек…</div>;
   }
 
   const isSidePanel = layout === "sidepanel";
 
   const toggleSidePanelFromPopup = async () => {
     if (!chrome.sidePanel?.open) {
-      setError("Side Panel is not available in this Chromium version (need 114+).");
+      setError("Боковая панель недоступна в этой версии Chromium (нужна 114+).");
       return;
     }
     setError(null);
     try {
       const wid = await getExtensionHostWindowId();
-      if (wid == null) throw new Error("No browser window for extension");
+      if (wid == null) throw new Error("Нет окна браузера для расширения");
       const open = await isSidePanelPresentForWindow(wid);
       if (open) {
         await setSidePanelCloseSuppression(wid);
@@ -865,8 +865,8 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
     uiMode === "shell" ? (
       <>
         <p style={{ margin: 0, fontSize: 12, color: "#444", lineHeight: 1.35 }}>
-          Live recording and transcript run in the <strong>side panel</strong>. Sign in here, adjust the server URL
-          in Settings, then open the panel to start.
+          Живая запись и расшифровка работают в <strong>боковой панели</strong>. Войдите здесь, укажите URL сервера в
+          настройках, затем откройте панель и начните запись.
         </p>
         {offscreenMicActive ? (
           <div
@@ -879,8 +879,8 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
               border: "1px solid #ffcc80",
             }}
           >
-            Microphone recording is active (offscreen). Stop from the extension toolbar menu →{" "}
-            <strong>Stop recording (microphone)</strong>, or use Stop in the side panel if it is open.
+            Запись с микрофона активна (фоновый документ). Остановите через меню расширения на панели инструментов →{" "}
+            <strong>Остановить запись (микрофон)</strong> или кнопкой «Остановить» в боковой панели, если она открыта.
           </div>
         ) : null}
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -890,10 +890,10 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
             disabled={oauthBusy}
             style={{ padding: "10px 12px", fontWeight: 600 }}
           >
-            {sidePanelOpen ? "Close recording side panel" : "Open recording side panel"}
+            {sidePanelOpen ? "Закрыть боковую панель записи" : "Открыть боковую панель записи"}
           </button>
           <button type="button" onClick={openUploadWindow} disabled={oauthBusy} style={{ padding: "8px 12px" }}>
-            Upload audio file…
+            Загрузить аудиофайл…
           </button>
         </div>
         <div
@@ -909,7 +909,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
           }}
         >
           <span>
-            Auth:{" "}
+            Вход:{" "}
             <strong
               style={{
                 color:
@@ -917,24 +917,24 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
               }}
             >
               {sessionOk === null
-                ? "checking…"
+                ? "проверка…"
                 : sessionOk
-                  ? "signed in"
+                  ? "выполнен"
                   : settings.accessToken
-                    ? "invalid token (clearing…)"
-                    : "not signed in"}
+                    ? "недействительный токен (очистка…)"
+                    : "не выполнен"}
             </strong>
           </span>
           {sessionOk === true ? (
             <button type="button" onClick={() => void handleLogout()} disabled={oauthBusy} style={{ padding: "4px 12px" }}>
-              Log out
+              Выйти
             </button>
           ) : null}
-          {oauthBusy ? <span>Opening provider…</span> : null}
+          {oauthBusy ? <span>Открытие провайдера…</span> : null}
         </div>
         <div style={{ fontSize: 11, color: "#666", lineHeight: 1.25 }}>
-          Toolbar menu → <strong>Start recording…</strong> opens the side panel and starts the same flow as Start
-          inside the panel.
+          Меню на панели инструментов → <strong>Начать запись…</strong> открывает боковую панель и запускает тот же сценарий,
+          что и «Начать» внутри панели.
         </div>
       </>
     ) : null;
@@ -958,12 +958,12 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
     >
       {uiMode === "recording" && isSidePanel ? (
         <div style={{ fontSize: 11, color: "#555", lineHeight: 1.25 }}>
-          Primary recording surface — Start/Stop, transcript, and tab capture run here. For login and server URL, use
-          the toolbar popup <strong>Settings</strong>.
+          Основная поверхность записи — здесь «Начать/Остановить», расшифровка и захват вкладки. Для входа и URL сервера
+          откройте всплывающее окно расширения, раздел <strong>Настройки</strong>.
         </div>
       ) : null}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
-        <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.1 }}>Voice Transcriber</h2>
+        <h2 style={{ margin: 0, fontSize: 18, lineHeight: 1.1 }}>Voice transcriber</h2>
         <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
           {uiMode === "recording" && !isSidePanel && chrome.sidePanel?.open ? (
             <button
@@ -972,7 +972,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
               disabled={oauthBusy}
               style={{ padding: "6px 8px" }}
             >
-              {sidePanelOpen ? "Close panel" : "Side panel"}
+              {sidePanelOpen ? "Закрыть панель" : "Боковая панель"}
             </button>
           ) : null}
           {!isSidePanel ? (
@@ -982,7 +982,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
               disabled={oauthBusy}
               style={{ padding: "6px 10px", whiteSpace: "nowrap" }}
             >
-              Settings…
+              Настройки…
             </button>
           ) : null}
         </div>
@@ -1003,31 +1003,31 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
             disabled={status === "recording" || oauthBusy}
             style={{ flex: 1, minWidth: 0 }}
           >
-            Start Recording
+            Начать запись
           </button>
           <button
             onClick={handleStop}
             disabled={status !== "recording"}
             style={{ flex: 1, minWidth: 0 }}
           >
-            Stop Recording
+            Остановить запись
           </button>
         </div>
         <div style={{ marginTop: 4, fontSize: 12, lineHeight: 1.2 }}>
-          Status:{" "}
+          Статус:{" "}
           <strong style={{ color: status === "recording" ? "green" : "gray" }}>
-            {status}
+            {status === "recording" ? "идёт запись" : "остановлено"}
           </strong>
         </div>
         {settings.audioSource === "microphone" ? (
           <div style={{ marginTop: 4, fontSize: 11, color: "#555", lineHeight: 1.25 }}>
-            Microphone recording runs in a hidden offscreen page — you can minimize the side panel while recording.
-            Use the toolbar menu → <strong>Stop recording (microphone)</strong> or press Stop here.
+            Запись с микрофона идёт в скрытом фоновом документе — боковую панель можно свернуть. Остановка через меню
+            расширения → <strong>Остановить запись (микрофон)</strong> или кнопкой «Остановить запись» здесь.
           </div>
         ) : (
           <div style={{ marginTop: 4, fontSize: 11, color: "#555", lineHeight: 1.25 }}>
-            Tab audio is captured in this panel — keep it open while recording. If you close the captured tab,
-            recording stops automatically (WebSocket closes; upload runs when chunks exist).
+            Звук вкладки захватывается в этой панели — держите её открытой во время записи. Если закрыть захваченную вкладку,
+            запись остановится автоматически (WebSocket закроется; загрузка при наличии фрагментов).
           </div>
         )}
         <div
@@ -1043,7 +1043,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
           }}
         >
           <span>
-            Auth:{" "}
+            Вход:{" "}
             <strong
               style={{
                 color:
@@ -1055,20 +1055,20 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
               }}
             >
               {sessionOk === null
-                ? "checking…"
+                ? "проверка…"
                 : sessionOk
-                  ? "signed in"
+                  ? "выполнен"
                   : settings.accessToken
-                    ? "invalid token (clearing…)"
-                    : "not signed in"}
+                    ? "недействительный токен (очистка…)"
+                    : "не выполнен"}
             </strong>
           </span>
           {sessionOk === true ? (
             <button type="button" onClick={() => void handleLogout()} disabled={oauthBusy} style={{ padding: "4px 12px" }}>
-              Log out
+              Выйти
             </button>
           ) : null}
-          {oauthBusy ? <span>Opening provider…</span> : null}
+          {oauthBusy ? <span>Открытие провайдера…</span> : null}
         </div>
       </section>
 
@@ -1086,18 +1086,18 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
           <button
             type="button"
             onClick={handleDownloadTranscript}
-            title="Сохранить текущий текст из live (fast) на диск; это не канонический final-экспорт."
+            title="Сохранить текущий текст из живого потока (fast) на диск; это не канонический финальный экспорт."
             style={{ flex: "1 1 120px", minWidth: 0 }}
           >
-            Save live text
+            Сохранить живой текст
           </button>
           {!isSidePanel ? (
             <button onClick={() => void handleUploadFile()} style={{ flex: "1 1 120px", minWidth: 0 }}>
-              Upload audio file
+              Загрузить аудио
             </button>
           ) : null}
           <button type="button" onClick={() => void handleRefreshTranscriptFromServer()} disabled={!conversationId} style={{ flex: "1 1 120px", minWidth: 0 }}>
-            Refresh from server
+            Обновить с сервера
           </button>
           <button
             type="button"
@@ -1107,12 +1107,12 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
               !conversationId
                 ? undefined
                 : !finalExportReady
-                  ? "Final transcript not ready yet (server batch ASR after stop/upload)."
+                  ? "Финальная расшифровка ещё не готова (пакетное ASR на сервере после остановки/загрузки)."
                   : "GET /export?format=md&tier=final"
             }
             style={{ flex: "1 1 120px", minWidth: 0 }}
           >
-            Export final (MD)
+            Экспорт final (MD)
           </button>
           <button
             type="button"
@@ -1122,12 +1122,12 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
               !conversationId
                 ? undefined
                 : !finalExportReady
-                  ? "Final transcript not ready yet (server batch ASR after stop/upload)."
+                  ? "Финальная расшифровка ещё не готова (пакетное ASR на сервере после остановки/загрузки)."
                   : "GET /export?format=json&tier=final"
             }
             style={{ flex: "1 1 120px", minWidth: 0 }}
           >
-            Export final (JSON)
+            Экспорт final (JSON)
           </button>
           <button
             type="button"
@@ -1135,11 +1135,11 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
             disabled={!conversationId}
             style={{ flex: "1 1 100%", minWidth: 0 }}
           >
-            Reconnect transcript
+            Переподключить расшифровку
           </button>
         </div>
         <button type="button" onClick={handleGenerateSummary} style={{ width: "100%" }}>
-          Generate Summary
+          Сгенерировать сводку
         </button>
         <div
           style={{
@@ -1155,7 +1155,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
           }}
         >
           {transcriptLines.length === 0 ? (
-            <span style={{ color: "#777" }}>Live transcript will appear here…</span>
+            <span style={{ color: "#777" }}>Живая расшифровка появится здесь…</span>
           ) : (
             transcriptLines.map((line) => <div key={line.id}>{line.text}</div>)
           )}
@@ -1179,7 +1179,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
           minWidth: 0,
         }}
       >
-        {error ? error : uploadInfo ?? "No errors"}
+        {error ? error : uploadInfo ?? "Нет сообщений"}
       </div>
 
       {settingsOpen ? (
@@ -1200,7 +1200,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
           <div
             role="dialog"
             aria-modal="true"
-            aria-label="Settings"
+            aria-label="Настройки"
             onClick={(e) => e.stopPropagation()}
             style={{
               width: "100%",
@@ -1227,16 +1227,16 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
                 borderBottom: "1px solid #eee",
               }}
             >
-              <div style={{ fontSize: 14, fontWeight: 600 }}>Settings</div>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>Настройки</div>
               <button type="button" onClick={() => setSettingsOpen(false)} style={{ padding: "4px 10px" }}>
-                Close
+                Закрыть
               </button>
             </div>
 
             <div style={{ padding: 12, overflowY: "auto", minHeight: 0, flex: "1 1 auto" }}>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 <label style={{ display: "block", fontSize: 12 }}>
-                  Server URL
+                  URL сервера
                   <input
                     type="text"
                     value={settings.serverUrl}
@@ -1254,7 +1254,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
 
                 {sessionOk === true ? (
                   <button type="button" onClick={() => void handleLogout()} disabled={oauthBusy} style={{ width: "100%", padding: "8px 12px" }}>
-                    Log out
+                    Выйти
                   </button>
                 ) : (
                   <>
@@ -1265,7 +1265,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
                         disabled={oauthBusy}
                         style={{ flex: 1, minWidth: 0 }}
                       >
-                        Sign in with Google
+                        Войти через Google
                       </button>
                       <button
                         type="button"
@@ -1273,33 +1273,33 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
                         disabled={oauthBusy}
                         style={{ flex: 1, minWidth: 0 }}
                       >
-                        Sign in with Yandex
+                        Войти через Яндекс
                       </button>
                     </div>
                   </>
                 )}
 
                 <label style={{ display: "block", fontSize: 12 }}>
-                  Audio source
+                  Источник звука
                   <select
                     value={settings.audioSource}
                     onChange={onAudioSourceChange}
                     style={{ width: "100%", boxSizing: "border-box", marginTop: 4 }}
                   >
-                    <option value="microphone">Microphone</option>
-                    <option value="tab">Tab audio</option>
-                    <option value="dual">Microphone + tab (mixed)</option>
-                    <option value="system">System audio (not implemented)</option>
+                    <option value="microphone">Микрофон</option>
+                    <option value="tab">Звук вкладки</option>
+                    <option value="dual">Микрофон + вкладка (смешано)</option>
+                    <option value="system">Системный звук (не реализовано)</option>
                   </select>
                 </label>
                 {settings.audioSource === "microphone" || settings.audioSource === "dual" ? (
                   <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                     <div style={{ fontSize: 11, color: "#666", lineHeight: 1.25 }}>
-                      If Chrome doesn’t show a microphone prompt (or you dismissed it), allow microphone for this extension in
-                      Chrome site settings.
+                      Если Chrome не показывает запрос доступа к микрофону (или вы его закрыли), разрешите микрофон для этого
+                      расширения в настройках сайтов Chrome.
                     </div>
                     <button type="button" onClick={openExtensionMicSettings} style={{ width: "100%" }}>
-                      Open microphone settings
+                      Открыть настройки микрофона
                     </button>
                   </div>
                 ) : null}
@@ -1312,7 +1312,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
                   }}
                 >
                   <label style={{ display: "block", fontSize: 12, minWidth: 0 }}>
-                    Chunk (ms)
+                    Фрагмент (мс)
                     <input
                       type="number"
                       min={500}
@@ -1325,7 +1325,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
                   </label>
 
                   <label style={{ display: "block", fontSize: 12, minWidth: 0 }}>
-                    TTL (days)
+                    TTL (дней)
                     <input
                       type="number"
                       min={1}
@@ -1338,29 +1338,29 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
                 </div>
 
                 <label style={{ display: "block", fontSize: 12 }}>
-                  Realtime mode
+                  Режим realtime
                   <select
                     value={settings.realtimeMode}
                     onChange={onRealtimeModeChange}
                     style={{ width: "100%", boxSizing: "border-box", marginTop: 4 }}
                   >
-                    <option value="chunk">Chunk → ASR → partial transcript</option>
-                    <option value="windowed">Window buffer → ASR → transcript</option>
+                    <option value="chunk">Фрагмент → ASR → частичная расшифровка</option>
+                    <option value="windowed">Окно буфера → ASR → расшифровка</option>
                   </select>
                 </label>
 
                 <div style={{ fontSize: 12, lineHeight: 1.25 }}>
-                  <div style={{ fontWeight: 600 }}>Language</div>
+                  <div style={{ fontWeight: 600 }}>Язык</div>
                   <div style={{ marginTop: 4, color: "#555" }}>
-                    Server default:{" "}
+                    По умолчанию на сервере:{" "}
                     <strong>
                       {settings.accessToken
                         ? serverUserSettings
                           ? serverUserSettings.default_language
                           : serverUserSettingsError
-                            ? "unavailable"
-                            : "loading…"
-                        : "not signed in"}
+                            ? "недоступно"
+                            : "загрузка…"
+                        : "не выполнен вход"}
                     </strong>
                   </div>
                   {serverUserSettingsError ? (
@@ -1369,12 +1369,12 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
                     </div>
                   ) : null}
                   <div style={{ marginTop: 4, fontSize: 11, color: "#666" }}>
-                    Language hint is managed on the server (Web UI Settings). The extension does not override it.
+                    Языковая подсказка задаётся на сервере (веб-интерфейс → Настройки). Расширение её не переопределяет.
                   </div>
                 </div>
 
                 <label style={{ display: "block", fontSize: 12 }}>
-                  Max duration (minutes)
+                  Макс. длительность (мин.)
                   <input
                     type="number"
                     min={1}

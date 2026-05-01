@@ -6,7 +6,7 @@ interface RecordingDownloadIconButtonProps {
   title?: string;
 }
 
-const DEFAULT_TITLE = "Download original recording";
+const DEFAULT_TITLE = "Скачать исходную запись";
 
 export function RecordingDownloadIconButton({
   onClick,

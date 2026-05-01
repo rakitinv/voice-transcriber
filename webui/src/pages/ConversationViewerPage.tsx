@@ -24,7 +24,7 @@ function fmtDt(value: string | null | undefined): string {
   if (!value) return "—";
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return value;
-  return d.toLocaleString();
+  return d.toLocaleString("ru-RU");
 }
 
 function sleep(ms: number): Promise<void> {
@@ -89,11 +89,11 @@ export function ConversationViewerPage() {
     void conversationsApi.exportTranscript(id, "md", { tier });
   };
 
-  if (isLoading) return <p className={styles.status}>Loading…</p>;
+  if (isLoading) return <p className={styles.status}>Загрузка…</p>;
   if (isError) {
     return (
       <p className={styles.error}>
-        {error instanceof Error ? error.message : "Failed to load conversation."}
+        {error instanceof Error ? error.message : "Не удалось загрузить разговор."}
       </p>
     );
   }
@@ -160,7 +160,7 @@ export function ConversationViewerPage() {
   return (
     <div className={styles.page}>
       <div className={styles.header}>
-        <Link to="/" className={styles.back}>← Conversations</Link>
+        <Link to="/" className={styles.back}>← Разговоры</Link>
         <div className={styles.actions}>
           <RecordingDownloadIconButton
             onClick={() => {
@@ -179,7 +179,7 @@ export function ConversationViewerPage() {
               !hasTranscriptContent ? "Нет готовой расшифровки для скачивания" : undefined
             }
           >
-            Download transcript
+            Скачать расшифровку
           </Button>
           <Button
             variant="secondary"
@@ -205,7 +205,7 @@ export function ConversationViewerPage() {
                   : undefined
             }
           >
-            Transcribe again
+            Распознать снова
           </Button>
           <Button
             variant="secondary"
@@ -234,7 +234,7 @@ export function ConversationViewerPage() {
                     : undefined
             }
           >
-            {diarizationBusy ? "Diarizing…" : "Diarize again"}
+            {diarizationBusy ? "Диаризация…" : "Диаризация снова"}
           </Button>
           <Button
             variant="secondary"
@@ -243,8 +243,8 @@ export function ConversationViewerPage() {
             }
             title={
               !sessionSummaryFeatureOn
-                ? "Disabled on server (llm.session_summary_enabled). See Settings → Server limits."
-                : "Load or refresh the rolling Markdown summary for this recording session (§7). Generated on the server after the transcript pipeline (ASR, then diarization if enabled)."
+                ? "Отключено на сервере (llm.session_summary_enabled). См. Настройки → Ограничения сервера."
+                : "Загрузить или обновить скользящую сводку сессии записи в Markdown на сервере. Формируется после конвейера расшифровки (ASR, затем диаризация при включении)."
             }
             onClick={async () => {
               if (!id || !sessionSummaryFeatureOn) return;
@@ -289,13 +289,13 @@ export function ConversationViewerPage() {
                   queryKey: CONVERSATION_QUERY_KEY(id, tier),
                 });
               } catch {
-                notifyError("Could not load session summary.");
+                notifyError("Не удалось загрузить сводку сессии.");
               } finally {
                 setRollingSummaryLoading(false);
               }
             }}
           >
-            {rollingSummaryLoading ? "Loading…" : "Session summary"}
+            {rollingSummaryLoading ? "Загрузка…" : "Сводка сессии"}
           </Button>
         </div>
       </div>
@@ -336,7 +336,7 @@ export function ConversationViewerPage() {
               }}
               title="Показать быстрый (realtime) вариант, если есть"
             >
-              Fast
+              Быстрый
             </button>
             {" / "}
             <button
@@ -349,7 +349,7 @@ export function ConversationViewerPage() {
               }}
               title="Показать финальный вариант (как для загрузки файла)"
             >
-              Final
+              Финальный
             </button>
             {"] "}
             {transcriptProcessing ? (
@@ -358,7 +358,7 @@ export function ConversationViewerPage() {
               <>Не производилась</>
             ) : (
               <>
-                {conversation.transcriptKind ?? "—"} / rev.{" "}
+                {conversation.transcriptKind ?? "—"} / рев.{" "}
                 {conversation.transcriptRevision ?? "—"} / {conversation.transcriptStatus ?? "—"}
                 {conversation.transcriptCreatedAt ? (
                   <>
@@ -389,15 +389,15 @@ export function ConversationViewerPage() {
       </div>
       {conversation.summary && (
         <div className={styles.summary}>
-          <h3>Summary</h3>
+          <h3>Краткая сводка</h3>
           <p>{conversation.summary}</p>
         </div>
       )}
       {sessionSummaryFeatureOn && (
         <div className={styles.summary}>
-          <h3>Rolling summary (recording session)</h3>
+          <h3>Скользящая сводка (сессия записи)</h3>
           <p className={styles.sessionSummaryMeta}>
-            Server status:{" "}
+            Статус на сервере:{" "}
             <strong>{sessionSummaryDisplayStatus}</strong>
             {sessionSummaryDisplayUpdatedAt
               ? ` · ${fmtDt(sessionSummaryDisplayUpdatedAt)}`
@@ -406,9 +406,8 @@ export function ConversationViewerPage() {
           {(sessionSummaryDisplayStatus === "pending" ||
             sessionSummaryDisplayStatus === "running") && (
             <p className={styles.summaryHint}>
-              The summary is produced asynchronously after your transcript is ready (and after
-              diarization when it is enabled). This row updates automatically while pending or
-              running.
+              Сводка создаётся асинхронно после готовности расшифровки (и после диаризации, если она
+              включена). Эта строка обновляется автоматически, пока статус «ожидание» или «выполняется».
             </p>
           )}
           {rollingSummary?.status === "failed" && rollingSummary.error ? (
@@ -417,7 +416,7 @@ export function ConversationViewerPage() {
           {rollingSummary?.summary_md ? (
             <pre className={styles.sessionSummaryBody}>{rollingSummary.summary_md}</pre>
           ) : rollingSummary?.status === "success" && !rollingSummary.summary_md ? (
-            <p className={styles.summaryHint}>Summary text is empty.</p>
+            <p className={styles.summaryHint}>Текст сводки пуст.</p>
           ) : null}
         </div>
       )}
@@ -434,7 +433,7 @@ export function ConversationViewerPage() {
           transcriptProcessing
             ? "Расшифровка в обработке… Это может занять несколько минут."
             : tier === "fast"
-              ? "Fast-ветка для этого разговора недоступна (есть только Final)."
+              ? "Быстрая ветка для этого разговора недоступна (есть только финальная)."
               : "Расшифровка пока недоступна."
         }
       />

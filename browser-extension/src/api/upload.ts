@@ -55,16 +55,16 @@ export async function postUploadAudio(
   const res = await fetch(url.toString(), { method: "POST", headers, body: form });
   const text = await res.text().catch(() => "");
   if (!res.ok) {
-    throw new Error(`Upload failed: ${res.status} ${text}`.trim());
+    throw new Error(`Загрузка не удалась: ${res.status} ${text}`.trim());
   }
   let data: UploadAudioResponse;
   try {
     data = JSON.parse(text || "{}") as UploadAudioResponse;
   } catch {
-    throw new Error("Upload response was not valid JSON");
+    throw new Error("Ответ загрузки не является корректным JSON");
   }
   if (!data.conversation_id) {
-    throw new Error("Upload succeeded but response had no conversation_id");
+    throw new Error("Загрузка выполнена, но в ответе нет conversation_id");
   }
   return data;
 }

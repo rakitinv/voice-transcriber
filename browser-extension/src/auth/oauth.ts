@@ -251,7 +251,7 @@ export async function runOAuthLoginAsync(
     const authUrl = await fetchWebAlignedExtensionAuthorizeUrl(base, provider, redirectUri);
     const { responseUrl, chromeError } = await launchWebAuthFlowAsync(authUrl, true);
     if (chromeError) throw new Error(chromeError);
-    if (!responseUrl) throw new Error("OAuth cancelled or no redirect URL");
+    if (!responseUrl) throw new Error("OAuth отменён или нет URL перенаправления");
 
     const parsed = parseServiceTokensFromOAuthRedirect(responseUrl);
     if (parsed.error) {
@@ -260,7 +260,7 @@ export async function runOAuthLoginAsync(
       );
     }
     if (!parsed.accessToken || !parsed.refreshToken) {
-      throw new Error("OAuth completed but access_token or refresh_token is missing");
+      throw new Error("OAuth завершён, но отсутствуют access_token или refresh_token");
     }
     await updateSettings({ accessToken: parsed.accessToken, refreshToken: parsed.refreshToken });
     return { ok: true };

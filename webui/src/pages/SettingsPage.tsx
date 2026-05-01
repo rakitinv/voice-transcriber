@@ -17,16 +17,16 @@ import styles from "./SettingsPage.module.css";
 
 const LINK_FAIL_MESSAGES: Record<string, string> = {
   provider_already_linked_elsewhere:
-    "This provider account is already linked to another Voice Transcriber user.",
+    "Этот аккаунт провайдера уже привязан к другому пользователю Voice transcriber.",
   provider_email_conflict:
-    "That provider email is already used by another account.",
-  provider_denied: "Provider login was cancelled or denied.",
-  missing_code: "OAuth response incomplete. Try linking again.",
-  invalid_state: "Link session expired or is invalid. Try again.",
-  state_mismatch: "OAuth state did not match. Try again.",
-  token_exchange: "Could not complete token exchange with the provider.",
-  user_not_found: "Your session no longer matches the server. Sign in again.",
-  unknown: "Could not link provider.",
+    "Этот адрес провайдера уже используется другой учётной записью.",
+  provider_denied: "Вход у провайдера отменён или запрещён.",
+  missing_code: "Ответ OAuth неполный. Попробуйте привязать снова.",
+  invalid_state: "Сессия привязки истекла или недействительна. Повторите попытку.",
+  state_mismatch: "OAuth state не совпал. Повторите попытку.",
+  token_exchange: "Не удалось обменять код у провайдера.",
+  user_not_found: "Сессия не совпадает с сервером. Войдите снова.",
+  unknown: "Не удалось привязать провайдера.",
 };
 
 export function SettingsPage() {
@@ -45,11 +45,11 @@ export function SettingsPage() {
     if (!link) return;
     const provider = searchParams.get("provider");
     if (link === "success") {
-      notifyInfo(provider ? `Linked ${provider} to your account.` : "Provider linked.");
+      notifyInfo(provider ? `Провайдер ${provider} привязан к учётной записи.` : "Провайдер привязан.");
       void queryClient.invalidateQueries({ queryKey: SETTINGS_OAUTH_IDENTITIES_KEY });
     } else if (link === "error") {
       const reason = searchParams.get("reason") ?? "unknown";
-      notifyError(LINK_FAIL_MESSAGES[reason] ?? `Link failed (${reason}).`);
+      notifyError(LINK_FAIL_MESSAGES[reason] ?? `Привязка не удалась (${reason}).`);
     }
     setSearchParams({}, { replace: true });
   }, [searchParams, setSearchParams, queryClient]);
@@ -103,63 +103,63 @@ export function SettingsPage() {
 
   return (
     <div className={styles.page}>
-      <h1 className={styles.title}>Settings</h1>
+      <h1 className={styles.title}>Настройки</h1>
 
       <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>Server limits</h2>
-        {limitsLoading && <p className={styles.muted}>Loading…</p>}
+        <h2 className={styles.sectionTitle}>Ограничения сервера</h2>
+        {limitsLoading && <p className={styles.muted}>Загрузка…</p>}
         {!limitsLoading && limits && (
           <dl className={styles.dl}>
-            <dt>Max duration</dt>
-            <dd>{limits.max_duration_seconds} s</dd>
-            <dt>Max TTL</dt>
-            <dd>{limits.max_ttl_days} days</dd>
-            <dt>Max file size</dt>
-            <dd>{limits.max_file_size_bytes} bytes</dd>
-            <dt>Realtime modes</dt>
+            <dt>Макс. длительность</dt>
+            <dd>{limits.max_duration_seconds} с</dd>
+            <dt>Макс. TTL</dt>
+            <dd>{limits.max_ttl_days} дн.</dd>
+            <dt>Макс. размер файла</dt>
+            <dd>{limits.max_file_size_bytes} байт</dd>
+            <dt>Режимы realtime</dt>
             <dd>{limits.allowed_realtime_modes.join(", ")}</dd>
-            <dt>Chunk size (ms)</dt>
+            <dt>Размер фрагмента (мс)</dt>
             <dd>
               {limits.chunk_ms_min} – {limits.chunk_ms_max}
             </dd>
             {vadDefaults && (
               <>
-                <dt>ASR VAD (server defaults)</dt>
+                <dt>ASR VAD (значения сервера по умолчанию)</dt>
                 <dd>
-                  {vadDefaults.vad_filter ? "on" : "off"}, min silence {vadDefaults.min_silence_ms} ms
-                  {vadDefaults.threshold != null ? `, threshold ${vadDefaults.threshold}` : ""}
-                  {vadDefaults.speech_pad_ms != null ? `, pad ${vadDefaults.speech_pad_ms} ms` : ""}
+                  {vadDefaults.vad_filter ? "вкл." : "выкл."}, мин. тишина {vadDefaults.min_silence_ms} мс
+                  {vadDefaults.threshold != null ? `, порог ${vadDefaults.threshold}` : ""}
+                  {vadDefaults.speech_pad_ms != null ? `, отступ ${vadDefaults.speech_pad_ms} мс` : ""}
                 </dd>
               </>
             )}
-            <dt>Diarization re-ASR per turn (server default)</dt>
-            <dd>{limits.diarization_turn_level_retranscription_default ? "on" : "off"}</dd>
-            <dt>LLM session summary (§7.6)</dt>
-            <dd>{limits.llm_session_summary_enabled ? "enabled" : "off"}</dd>
+            <dt>Повторное ASR по репликам при диаризации (по умолчанию на сервере)</dt>
+            <dd>{limits.diarization_turn_level_retranscription_default ? "вкл." : "выкл."}</dd>
+            <dt>Сводка сессии LLM</dt>
+            <dd>{limits.llm_session_summary_enabled ? "включено" : "выкл."}</dd>
           </dl>
         )}
       </section>
 
       <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>Connected accounts</h2>
+        <h2 className={styles.sectionTitle}>Подключённые аккаунты</h2>
         <p className={styles.muted}>
-          Link Google or Yandex so sign-in with either provider opens the same account. Register the link callback URLs
-          in your OAuth apps (see API docs).
+          Привяжите Google или Яндекс — вход через любой из них откроет одну и ту же учётную запись. Зарегистрируйте URL
+          обратного вызова привязки в настройках OAuth-приложений (см. документацию API).
         </p>
-        {oauthIdLoading && <p className={styles.muted}>Loading linked providers…</p>}
+        {oauthIdLoading && <p className={styles.muted}>Загрузка привязанных провайдеров…</p>}
         {!oauthIdLoading && oauthIdentities && oauthIdentities.length > 0 && (
           <ul className={styles.identityList}>
             {oauthIdentities.map((row) => (
               <li key={`${row.provider}-${row.subject_hint}`}>
                 <strong>{row.provider}</strong>
                 {row.provider_email ? ` — ${row.provider_email}` : ""}{" "}
-                <span className={styles.muted}>(id {row.subject_hint})</span>
+                <span className={styles.muted}>(ид. {row.subject_hint})</span>
               </li>
             ))}
           </ul>
         )}
         {!oauthIdLoading && oauthIdentities && oauthIdentities.length === 0 && (
-          <p className={styles.muted}>No extra providers linked yet.</p>
+          <p className={styles.muted}>Дополнительные провайдеры ещё не привязаны.</p>
         )}
         <div className={styles.linkActions}>
           <Button
@@ -175,11 +175,11 @@ export function SettingsPage() {
                 })
                 .catch(() => {
                   setLinkBusy(null);
-                  notifyError("Could not start Google link.");
+                  notifyError("Не удалось начать привязку Google.");
                 });
             }}
           >
-            {linkBusy === "google" ? "Redirecting…" : "Link Google"}
+            {linkBusy === "google" ? "Переадресация…" : "Привязать Google"}
           </Button>
           <Button
             type="button"
@@ -194,22 +194,22 @@ export function SettingsPage() {
                 })
                 .catch(() => {
                   setLinkBusy(null);
-                  notifyError("Could not start Yandex link.");
+                  notifyError("Не удалось начать привязку Яндекса.");
                 });
             }}
           >
-            {linkBusy === "yandex" ? "Redirecting…" : "Link Yandex"}
+            {linkBusy === "yandex" ? "Переадресация…" : "Привязать Яндекс"}
           </Button>
         </div>
       </section>
 
       <section className={styles.section}>
-        <h2 className={styles.sectionTitle}>User settings</h2>
-        {userLoading && <p className={styles.muted}>Loading…</p>}
+        <h2 className={styles.sectionTitle}>Пользовательские настройки</h2>
+        {userLoading && <p className={styles.muted}>Загрузка…</p>}
         {!userLoading && userSettings && (
           <form onSubmit={handleSave} className={styles.form}>
             <label className={styles.label}>
-              Default language
+              Язык по умолчанию
               <select
                 name="defaultLanguage"
                 defaultValue={normalizeLanguageCode(userSettings.default_language)}
@@ -223,7 +223,7 @@ export function SettingsPage() {
               </select>
             </label>
             <label className={styles.label}>
-              Default TTL (days)
+              TTL по умолчанию (дней)
               <input
                 name="defaultTtl"
                 type="number"
@@ -234,14 +234,14 @@ export function SettingsPage() {
               />
             </label>
             <label className={styles.label}>
-              Search mode
+              Режим поиска
               <select
                 name="searchMode"
                 defaultValue={userSettings.search_mode}
                 className={styles.select}
               >
-                <option value="fulltext">Full-text</option>
-                <option value="semantic">Semantic</option>
+                <option value="fulltext">Полнотекстовый</option>
+                <option value="semantic">Семантический</option>
               </select>
             </label>
 
@@ -253,11 +253,11 @@ export function SettingsPage() {
                 checked={vadCustom}
                 onChange={(ev) => setVadCustom(ev.target.checked)}
               />
-              <label htmlFor="asrVadUseCustom">Custom ASR VAD (faster-whisper)</label>
+              <label htmlFor="asrVadUseCustom">Свои параметры ASR VAD (faster-whisper)</label>
             </div>
             <p className={styles.muted}>
-              When off, the server uses only environment variables (for example from Docker). When on, your values
-              apply to uploads, realtime, and diarization re-transcription for your account.
+              Если выключено, сервер берёт только переменные окружения (например из Docker). Если включено, ваши значения
+              применяются к загрузкам, realtime и повторному распознаванию при диаризации для вашей учётной записи.
             </p>
 
             <div className={styles.checkboxRow}>
@@ -268,12 +268,12 @@ export function SettingsPage() {
                 checked={diarRetrCustom}
                 onChange={(ev) => setDiarRetrCustom(ev.target.checked)}
               />
-              <label htmlFor="diarTurnRetrUseCustom">Custom diarization — re-ASR each speaker turn</label>
+              <label htmlFor="diarTurnRetrUseCustom">Свои параметры диаризации — повторное ASR для каждой реплики</label>
             </div>
             <p className={styles.muted}>
-              When off, the server default above applies. When on, your choice applies to diarization jobs for your
-              account: re-run ASR on short clips per pyannote turn (can change wording), or only assign speakers to
-              the existing full-file transcript.
+              Если выключено, действует значение сервера выше. Если включено, ваш выбор применяется к задачам диаризации:
+              снова запускать ASR на коротких фрагментах по репликам pyannote (может изменить формулировки) или только
+              назначать говорящих для уже готовой расшифровки всего файла.
             </p>
             <div className={styles.checkboxRow}>
               <input
@@ -283,7 +283,9 @@ export function SettingsPage() {
                 defaultChecked={!!userSettings.diarization_turn_level_retranscription}
                 disabled={!diarRetrCustom}
               />
-              <label htmlFor="diarTurnRetr">Re-ASR on each diarization turn (not speaker labeling only)</label>
+              <label htmlFor="diarTurnRetr">
+                Повторное ASR для каждой реплики при диаризации (не только метки говорящих)
+              </label>
             </div>
 
             <div className={styles.checkboxRow}>
@@ -294,10 +296,10 @@ export function SettingsPage() {
                 defaultChecked={userSettings.asr_vad_filter}
                 disabled={!vadCustom}
               />
-              <label htmlFor="asrVadFilter">VAD filter enabled</label>
+              <label htmlFor="asrVadFilter">Фильтр VAD включён</label>
             </div>
             <label className={styles.label}>
-              Min silence (ms)
+              Мин. тишина (мс)
               <input
                 name="asrVadMinSilenceMs"
                 type="number"
@@ -310,7 +312,7 @@ export function SettingsPage() {
               />
             </label>
             <label className={styles.label}>
-              VAD threshold (0–1, empty = model default)
+              Порог VAD (0–1, пусто = по умолчанию у модели)
               <input
                 name="asrVadThreshold"
                 type="number"
@@ -327,7 +329,7 @@ export function SettingsPage() {
               />
             </label>
             <label className={styles.label}>
-              Speech pad (ms, empty = model default)
+              Отступ речи (мс, пусто = по умолчанию у модели)
               <input
                 name="asrVadSpeechPadMs"
                 type="number"
@@ -345,7 +347,7 @@ export function SettingsPage() {
             </label>
 
             <Button type="submit" variant="primary" disabled={updateSettings.isPending}>
-              {updateSettings.isPending ? "Saving…" : "Save"}
+              {updateSettings.isPending ? "Сохранение…" : "Сохранить"}
             </Button>
           </form>
         )}

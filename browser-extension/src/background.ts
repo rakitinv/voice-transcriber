@@ -39,7 +39,7 @@ async function createConversation(settings: {
       : null;
 
   const body = JSON.stringify({
-    title: "Browser recording",
+    title: "Запись из браузера",
     ttl_days: ttl != null && ttl >= 1 ? ttl : null,
     realtime_mode: settings.realtimeMode ?? null,
     chunk_ms: settings.chunkSizeMs ?? null,
@@ -48,10 +48,10 @@ async function createConversation(settings: {
   const res = await fetch(url, { method: "POST", headers, body });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`Failed to create conversation: ${res.status} ${text}`);
+    throw new Error(`Не удалось создать разговор: ${res.status} ${text}`);
   }
   const data = (await res.json()) as { id?: string };
-  if (!data?.id) throw new Error("Backend did not return conversation id");
+  if (!data?.id) throw new Error("Сервер не вернул идентификатор разговора");
   return data.id;
 }
 
@@ -75,7 +75,7 @@ async function ensureOffscreenDocument(): Promise<void> {
     url: chrome.runtime.getURL("offscreen.html"),
     reasons: [chrome.offscreen.Reason.USER_MEDIA, chrome.offscreen.Reason.AUDIO_PLAYBACK],
     justification:
-      "Run microphone MediaRecorder and WebSocket /ws/audio when the extension popup may be closed (Chrome MV3).",
+      "Запуск MediaRecorder и WebSocket /ws/audio для микрофона, когда всплывающее окно расширения может быть закрыто (Chrome MV3).",
   });
 }
 
@@ -221,7 +221,7 @@ async function startOffscreenRecording(
     const t = setTimeout(() => {
       if (startWaiters.has(requestId)) {
         startWaiters.delete(requestId);
-        reject(new Error("Offscreen recording failed to start (timeout)"));
+        reject(new Error("Не удалось начать фоновую запись (таймаут)"));
       }
     }, 30_000);
 
@@ -229,7 +229,7 @@ async function startOffscreenRecording(
       clearTimeout(t);
       startWaiters.delete(requestId);
       if (r.ok) resolve();
-      else reject(new Error(r.error ?? "Offscreen start failed"));
+      else reject(new Error(r.error ?? "Не удалось начать фоновую запись"));
     });
 
     void chrome.runtime.sendMessage({
@@ -271,7 +271,7 @@ async function stopOffscreenRecording(): Promise<void> {
       if (settled) return;
       settled = true;
       stopResolver = null;
-      reject(new Error("Stop recording timed out"));
+      reject(new Error("Таймаут остановки записи"));
     }, 120_000);
 
     stopResolver = () => {
@@ -301,27 +301,27 @@ function registerContextMenus(): void {
   chrome.contextMenus.removeAll(() => {
     chrome.contextMenus.create({
       id: "vt_start_recording",
-      title: "Start recording…",
+      title: "Начать запись…",
       contexts: ["action"],
     });
     chrome.contextMenus.create({
       id: "vt_open_side_panel",
-      title: "Open recording side panel",
+      title: "Открыть боковую панель записи",
       contexts: ["action"],
     });
     chrome.contextMenus.create({
       id: "vt_upload_audio",
-      title: "Upload audio file…",
+      title: "Загрузить аудиофайл…",
       contexts: ["action"],
     });
     chrome.contextMenus.create({
       id: "vt_open_settings",
-      title: "Open settings (popup)…",
+      title: "Открыть настройки (всплывающее окно)…",
       contexts: ["action"],
     });
     chrome.contextMenus.create({
       id: "vt_stop_recording",
-      title: "Stop recording (microphone)",
+      title: "Остановить запись (микрофон)",
       contexts: ["action"],
       enabled: false,
     });
@@ -329,7 +329,7 @@ function registerContextMenus(): void {
 }
 
 chrome.runtime.onInstalled.addListener(() => {
-  console.log("Voice Transcriber extension installed");
+  console.log("Расширение Voice transcriber установлено");
   initSidePanel();
   registerContextMenus();
   void (async () => {

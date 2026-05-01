@@ -1,8 +1,8 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
   <head>
     <meta charset="UTF-8" />
-    <title>Upload audio — Voice Transcriber</title>
+    <title>Загрузка аудио — Voice transcriber</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <style>
       body {
@@ -25,9 +25,9 @@
     </style>
   </head>
   <body>
-    <h2 style="margin: 0 0 8px; font-size: 16px">Upload audio file</h2>
+    <h2 style="margin: 0 0 8px; font-size: 16px">Загрузка аудиофайла</h2>
     <p style="margin: 0 0 12px; font-size: 13px; color: #444">
-      Uses the same <code>POST /api/upload</code> as the extension popup (new conversation if none in URL).
+      Тот же <code>POST /api/upload</code>, что во всплывающем окне расширения (новый разговор, если в URL нет id).
     </p>
     <input type="file" id="file" accept="audio/*,.webm,.wav,.mp3,.m4a,.aac,.ogg,.flac,.opus" />
     <pre id="log"></pre>

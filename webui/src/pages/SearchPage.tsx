@@ -21,13 +21,13 @@ export function SearchPage() {
 
   return (
     <div className={styles.page}>
-      <h1 className={styles.title}>Search</h1>
+      <h1 className={styles.title}>Поиск</h1>
       <form onSubmit={handleSubmit} className={styles.form}>
         <input
           type="search"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder="Search by text…"
+          placeholder="Поиск по тексту…"
           className={styles.input}
           autoFocus
         />
@@ -37,14 +37,14 @@ export function SearchPage() {
             checked={semantic}
             onChange={(e) => setSemantic(e.target.checked)}
           />
-          Semantic search
+          Семантический поиск
         </label>
         <Button
           type="submit"
           variant="primary"
           disabled={!text.trim() || searchMutation.isPending}
         >
-          {searchMutation.isPending ? "Searching…" : "Search"}
+          {searchMutation.isPending ? "Поиск…" : "Найти"}
         </Button>
       </form>
 
@@ -52,25 +52,25 @@ export function SearchPage() {
         <p className={styles.error}>
           {searchMutation.error instanceof Error
             ? searchMutation.error.message
-            : "Search failed."}
+            : "Поиск не выполнен."}
         </p>
       )}
 
       {data && (
         <p className={styles.muted}>
-          Mode: {data.mode} · {data.total} hit(s)
+          Режим: {data.mode} · совпадений: {data.total}
         </p>
       )}
 
       {hasResults && (
         <div className={styles.results}>
-          <h2>Results</h2>
+          <h2>Результаты</h2>
           <ul className={styles.hitList}>
             {results.map((hit) => (
               <li key={`${hit.conversation_id}-${hit.transcript_id}-${hit.start}`} className={styles.hit}>
                 <div className={styles.hitMeta}>
                   <Link to={`/conversations/${hit.conversation_id}`} className={styles.hitLink}>
-                    Conversation {hit.conversation_id.slice(0, 8)}…
+                    Разговор {hit.conversation_id.slice(0, 8)}…
                   </Link>
                   {hit.speaker && <span className={styles.speaker}>{hit.speaker}</span>}
                   <span className={styles.time}>
@@ -85,7 +85,7 @@ export function SearchPage() {
       )}
 
       {searchMutation.isSuccess && data && results.length === 0 && (
-        <p className={styles.empty}>No results found.</p>
+        <p className={styles.empty}>Ничего не найдено.</p>
       )}
     </div>
   );

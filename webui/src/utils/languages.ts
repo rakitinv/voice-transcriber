@@ -3,7 +3,7 @@ export type LanguageOption = { code: string; label: string };
 // ISO 639-1 language codes (two-letter) + common extras used by ASR engines.
 // UI-only: server still accepts arbitrary strings, but the Settings form restricts input.
 export const LANGUAGE_OPTIONS: LanguageOption[] = [
-  { code: "auto", label: "auto (detect)" },
+  { code: "auto", label: "auto (автоопределение)" },
   // Common
   { code: "en", label: "en (English)" },
   { code: "ru", label: "ru (Русский)" },

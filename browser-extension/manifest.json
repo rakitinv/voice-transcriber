@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Voice Transcriber",
+  "name": "Voice transcriber",
   "version": "0.1.0",
-  "description": "Record browser audio and stream it to a backend transcription server.",
+  "description": "Запись звука из браузера и потоковая отправка на сервер расшифровки.",
   "permissions": [
     "tabs",
     "storage",
@@ -28,7 +28,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Voice Transcriber"
+    "default_title": "Voice transcriber"
   },
   "icons": {}
 }

@@ -38,7 +38,7 @@ export async function getConversationDetail(
   const res = await fetch(url, { headers: authHeaders(settings) });
   if (!res.ok) {
     const t = await res.text().catch(() => "");
-    throw new Error(`GET conversation failed: ${res.status} ${t.slice(0, 200)}`);
+    throw new Error(`Запрос разговора не удался: ${res.status} ${t.slice(0, 200)}`);
   }
   const raw = (await res.json()) as Record<string, unknown>;
   const transcript = (raw.transcript as TranscriptSegmentDto[] | undefined) ?? [];
@@ -71,7 +71,7 @@ export async function fetchConversationExport(
   const res = await fetch(url, { headers: authHeaders(settings) });
   if (!res.ok) {
     const t = await res.text().catch(() => "");
-    throw new Error(`Export failed: ${res.status} ${t.slice(0, 200)}`);
+    throw new Error(`Экспорт не удался: ${res.status} ${t.slice(0, 200)}`);
   }
   return res.text();
 }

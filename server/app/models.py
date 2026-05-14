@@ -3,6 +3,10 @@ SQLAlchemy ORM models for the backend.
 
 Tables:
 - users
+- admin_memberships (Ops console admin role; docs/ADMIN_OPS_CONSOLE.md)
+- admin_audit_events (Ops console audit log; docs/ADMIN_OPS_SPRINT3_CHECKLIST.md)
+- auth_signin_events (product login audit; docs/ADMIN_OPS_SPRINT6_CHECKLIST.md)
+- pipeline_events (pipeline stage feed; docs/ADMIN_OPS_SPRINT8_CHECKLIST.md)
 - conversations
 - transcripts
 - embeddings
@@ -19,6 +23,7 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -63,6 +68,103 @@ class User(Base):
     oauth_identities: Mapped[list["UserOAuthIdentity"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
     )
+    admin_membership: Mapped["AdminMembership | None"] = relationship(
+        back_populates="user", uselist=False
+    )
+
+
+class AdminMembership(Base):
+    """Explicit admin/operator role for a product user (ADMIN_OPS_CONSOLE §2, §6)."""
+
+    __tablename__ = "admin_memberships"
+    __table_args__ = (UniqueConstraint("user_id", name="uq_admin_memberships_user_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    # Extensible role tags, e.g. ["admin"], ["admin", "pipeline_ops"].
+    roles: Mapped[list] = mapped_column(JSONB, nullable=False, default=lambda: ["admin"])
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+    )
+
+    user: Mapped["User"] = relationship(back_populates="admin_membership")
+
+
+class AdminAuditEvent(Base):
+    """Append-only audit trail for admin API actions and conversation views (§8)."""
+
+    __tablename__ = "admin_audit_events"
+    __table_args__ = (Index("ix_admin_audit_events_created_at", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    admin_user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    action: Mapped[str] = mapped_column(String(128), nullable=False)
+    conversation_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+    )
+
+
+class PipelineEvent(Base):
+    """Technical pipeline milestones per conversation (no transcript content; §9)."""
+
+    __tablename__ = "pipeline_events"
+    __table_args__ = (
+        Index("ix_pipeline_events_conversation_id_created_at", "conversation_id", "created_at"),
+        Index("ix_pipeline_events_created_at", "created_at"),
+        Index("ix_pipeline_events_event_type_created_at", "event_type", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    transcript_id: Mapped[int | None] = mapped_column(
+        Integer, ForeignKey("transcripts.id", ondelete="SET NULL"), nullable=True
+    )
+    detail: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+    )
+
+
+class AuthSigninEvent(Base):
+    """Product authentication attempts (OAuth, refresh, API key); no transcript PII."""
+
+    __tablename__ = "auth_signin_events"
+    __table_args__ = (Index("ix_auth_signin_events_created_at", "created_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=datetime.utcnow, nullable=False
+    )
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False)
+    channel: Mapped[str] = mapped_column(String(32), nullable=False)
+    reason_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    client_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class UserOAuthIdentity(Base):
@@ -260,6 +362,10 @@ class Transcript(Base):
 
     # Provider metadata and run parameters (device, models, speaker limits, timings, etc.)
     meta: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    # Parallel/sequential ASR chunk progress (integers only; exposed in Admin API §9).
+    asr_chunk_total: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    asr_chunk_completed: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     # Raw JSON transcript with timestamps and speaker labels.
     transcript_json: Mapped[dict | None] = mapped_column(JSONB)

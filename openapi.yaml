@@ -37,15 +37,44 @@ tags:
     description: |
       Realtime (не HTTP JSON). OAS 3 не описывает Upgrade; ниже — зафиксированные URL и параметры.
       Реализация FastAPI — см. docs/WEBSOCKET.md.
+  - name: admin
+    description: |
+      Admin / Ops API (отдельный процесс в docker: сервис **admin-api**, порт по умолчанию 8003).
+      Тот же Bearer JWT, что у основного API; требуется строка в `admin_memberships`.
+      См. docs/ADMIN_OPS_CONSOLE.md (§9 — без содержимого чужих разговоров).
 
 paths:
   /api/auth/google:
     get:
       tags: [auth]
       summary: Старт OAuth Google
+      description: |
+        Редирект на Google. Для Ops-консоли: `?client=admin&next=<URL SPA>` — ``next`` должен входить в allowlist
+        ``VT_ADMIN_WEBUI_ORIGIN`` / ``VT_ADMIN_WEBUI_ORIGINS`` на сервисе API (тот же redirect_uri у провайдера, что у Web UI).
+      parameters:
+        - name: client
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [admin, extension]
+          description: Для админки передать `admin` вместе с `next`.
+        - name: next
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uri
+          description: При `client=admin` — origin админ-SPA (например `http://localhost:3003`).
       responses:
         "302":
-          description: Redirect на провайдера или Web UI
+          description: Redirect на провайдера или Web UI / admin-webui (после callback)
+        "400":
+          description: Некорректные параметры (например admin без allowlist для `next`)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
   /api/auth/google/callback:
     get:
       tags: [auth]
@@ -57,9 +86,30 @@ paths:
     get:
       tags: [auth]
       summary: Старт OAuth Yandex
+      description: |
+        Аналогично GET `/api/auth/google` — для админки `?client=admin&next=...` при настроенном allowlist.
+      parameters:
+        - name: client
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [admin, extension]
+        - name: next
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uri
       responses:
         "302":
           description: Redirect
+        "400":
+          description: Некорректные параметры (admin без allowlist)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
   /api/auth/yandex/callback:
     get:
       tags: [auth]
@@ -442,8 +492,16 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorDetail"
-
-  /api/conversations:
+        "429":
+          description: Слишком много неуспешных попыток refresh с данного IP (см. `auth.lockout` в server.yaml, Redis)
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
     post:
       tags: [conversations]
       summary: Создать разговор
@@ -948,6 +1006,378 @@ paths:
         "403":
           description: Отказ
 
+  /admin/api/v1/me:
+    get:
+      tags: [admin]
+      summary: Профиль администратора (аудит сессии консоли)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminMeResponse"
+        "401":
+          description: Не авторизован
+        "403":
+          description: Нет записи в admin_memberships
+
+  /admin/api/v1/live-tick:
+    get:
+      tags: [admin]
+      summary: Технический тик для live-обновления (без данных разговоров, §9)
+      description: |
+        Лёгкий сигнал времени сервера для консоли. В теле ответа только числовые поля контракта;
+        идентификаторы разговоров и текст транскриптов не передаются.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminLiveTickResponse"
+        "401":
+          description: Не авторизован
+        "403":
+          description: Нет admin_memberships
+
+  /admin/api/v1/pipeline-settings:
+    get:
+      tags: [admin]
+      summary: Снимок конфигурации пайплайна (без секретов)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminPipelineSettingsResponse"
+        "401":
+          description: Не авторизован
+        "403":
+          description: Нет admin_memberships
+
+  /admin/api/v1/external-tools:
+    get:
+      tags: [admin]
+      summary: Внешние ссылки (Grafana, Flower, …)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminExternalToolsResponse"
+        "401":
+          description: Не авторизован
+        "403":
+          description: Нет admin_memberships
+
+  /admin/api/v1/infrastructure:
+    get:
+      tags: [admin]
+      summary: PostgreSQL, Redis, основной API, очереди Celery (в т.ч. queue_depth)
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminInfrastructureResponse"
+        "401":
+          description: Не авторизован
+        "403":
+          description: Нет admin_memberships
+
+  /admin/api/v1/audit-events:
+    get:
+      tags: [admin]
+      summary: События аудита админки
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: action
+          in: query
+          schema: { type: string }
+        - name: conversation_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: admin_user_id
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminAuditEventsResponse"
+        "401":
+          description: Не авторизован
+        "403":
+          description: Нет admin_memberships
+
+  /admin/api/v1/pipeline-events:
+    get:
+      tags: [admin]
+      summary: Лента событий пайплайна (§9 — без текста разговора)
+      description: |
+        Неизвестные query-параметры отклоняются с 422. События пишутся воркерами (ASR, диаризация,
+        embeddings); поле `detail` содержит только числовые идентификаторы и короткие коды.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: conversation_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: event_type
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminPipelineEventsResponse"
+        "401":
+          description: Не авторизован
+        "403":
+          description: Нет admin_memberships
+        "422":
+          description: Неизвестный query-параметр или невалидные значения
+
+  /admin/api/v1/pipeline-events/wait:
+    get:
+      tags: [admin]
+      summary: Long poll — новые события после курсора или таймаут
+      description: |
+        Удерживает соединение до появления строк с `(created_at, id)` строго после курсора либо до
+        `timeout_seconds`. Неизвестные query-параметры — 422. Аудит админки на каждый цикл не пишется
+        (избегание шума); снимок ленты с аудитом — `GET /admin/api/v1/pipeline-events`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: since_created_at
+          in: query
+          required: true
+          schema: { type: string, format: date-time }
+        - name: since_id
+          in: query
+          required: true
+          schema: { type: string, format: uuid }
+        - name: conversation_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: event_type
+          in: query
+          schema: { type: string }
+        - name: timeout_seconds
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 55, default: 25 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminPipelineEventsWaitResponse"
+        "401":
+          description: Не авторизован
+        "403":
+          description: Нет admin_memberships
+        "422":
+          description: Неизвестный query-параметр или невалидные значения
+
+  /admin/api/v1/conversations:
+    get:
+      tags: [admin]
+      summary: Список разговоров (технические поля, §9)
+      description: |
+        Неизвестные query-параметры отклоняются с 422. Поля `transcript_revision_count`,
+        `session_summary_status`, `session_summary_error` — из БД без S3 HEAD по строкам.
+        Поля `asr_chunk_completed` / `asr_chunk_total` относятся к текущей задаче ASR в статусе
+        pending/running (прогресс нарезки по времени), если такая есть.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: user_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: transcript_status
+          in: query
+          schema: { type: string }
+        - name: transcript_kind
+          in: query
+          schema: { type: string }
+        - name: session_summary_status
+          in: query
+          schema: { type: string }
+        - name: session_summary_missing
+          in: query
+          schema: { type: boolean }
+        - name: has_audio
+          in: query
+          schema: { type: boolean }
+        - name: recording_session_id
+          in: query
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminConversationListResponse"
+        "401":
+          description: Не авторизован
+        "403":
+          description: Нет admin_memberships
+        "422":
+          description: Неизвестный query-параметр или невалидные значения
+
+  /admin/api/v1/conversations/{conversation_id}:
+    get:
+      tags: [admin]
+      summary: Карточка разговора (технические ревизии и статусы)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminConversationDetailResponse"
+        "401":
+          description: Не авторизован
+        "403":
+          description: Нет admin_memberships
+        "404":
+          description: Разговор не найден
+
+  /admin/api/v1/conversations/{conversation_id}/actions/retranscribe:
+    post:
+      tags: [admin]
+      summary: Повтор постановки ASR (очередь asr_final)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "202":
+          description: Принято
+        "400":
+          description: Нет аудио / владелец не найден
+        "401":
+          description: Не авторизован
+        "403":
+          description: Нет admin_memberships
+        "404":
+          description: Разговор не найден
+        "409":
+          description: ASR уже выполняется
+
+  /admin/api/v1/conversations/{conversation_id}/actions/reindex-embedding:
+    post:
+      tags: [admin]
+      summary: Переиндексация embedding
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+        - name: transcript_id
+          in: query
+          required: false
+          schema: { type: integer }
+      responses:
+        "202":
+          description: Принято
+        "400":
+          description: Embeddings выключены или нет подходящего транскрипта
+        "401":
+          description: Не авторизован
+        "403":
+          description: Нет admin_memberships
+        "404":
+          description: Разговор не найден
+
+  /admin/api/v1/conversations/{conversation_id}/actions/rediarize:
+    post:
+      tags: [admin]
+      summary: Повтор диаризации
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "202":
+          description: Принято
+        "400":
+          description: Диаризация выключена в конфиге
+        "401":
+          description: Не авторизован
+        "403":
+          description: Нет admin_memberships
+        "404":
+          description: Разговор не найден
+        "409":
+          description: Диаризация уже running
+
+  /admin/api/v1/conversations/{conversation_id}/actions/resummary:
+    post:
+      tags: [admin]
+      summary: Повтор постановки rolling session summary (очередь llm)
+      security:
+        - bearerAuth: []
+      parameters:
+        - $ref: "#/components/parameters/ConversationId"
+      responses:
+        "202":
+          description: Принято
+        "400":
+          description: Сводка сессии выключена в конфиге
+        "401":
+          description: Не авторизован
+        "403":
+          description: Нет admin_memberships
+        "404":
+          description: Разговор не найден
+        "409":
+          description: Сводка по цепочке уже running
+        "503":
+          description: Нет настроенного LLM-провайдера
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1344,6 +1774,394 @@ components:
             speech_pad_ms:
               type: integer
               nullable: true
+
+    AdminMeResponse:
+      type: object
+      additionalProperties: false
+      required: [user_id, email, roles]
+      properties:
+        user_id: { type: string }
+        email: { type: string }
+        roles:
+          type: array
+          items: { type: string }
+
+    AdminLiveTickResponse:
+      type: object
+      additionalProperties: false
+      required: [tick_ms, schema_version]
+      properties:
+        tick_ms: { type: integer, format: int64, description: "Метка UTC в миллисекундах (Unix epoch)" }
+        schema_version: { type: integer, description: "Версия формы ответа" }
+
+    AdminExternalToolItem:
+      type: object
+      additionalProperties: false
+      required: [name, url]
+      properties:
+        name: { type: string }
+        url: { type: string }
+
+    AdminExternalToolsResponse:
+      type: object
+      additionalProperties: false
+      required: [tools]
+      properties:
+        tools:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminExternalToolItem"
+
+    AdminInfraCheck:
+      type: object
+      additionalProperties: false
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        detail: { type: string, nullable: true }
+
+    AdminQueueConsumerCheck:
+      type: object
+      additionalProperties: false
+      required: [queue, consumer_responding, queue_depth, detail]
+      properties:
+        queue: { type: string }
+        consumer_responding: { type: boolean }
+        queue_depth: { type: integer, nullable: true }
+        detail: { type: string, nullable: true }
+
+    AdminInfrastructureResponse:
+      type: object
+      additionalProperties: false
+      required: [postgres, redis, main_api, celery_queues]
+      properties:
+        postgres:
+          $ref: "#/components/schemas/AdminInfraCheck"
+        redis:
+          $ref: "#/components/schemas/AdminInfraCheck"
+        main_api:
+          $ref: "#/components/schemas/AdminInfraCheck"
+        celery_queues:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminQueueConsumerCheck"
+
+    AdminAuditEventItem:
+      type: object
+      additionalProperties: false
+      required: [id, admin_user_id, action, conversation_id, detail, created_at]
+      properties:
+        id: { type: string }
+        admin_user_id: { type: string }
+        action: { type: string }
+        conversation_id: { type: string, nullable: true }
+        detail: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+
+    AdminAuditEventsResponse:
+      type: object
+      additionalProperties: false
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminAuditEventItem"
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+
+    AdminConversationListItem:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - user_id
+        - created_at
+        - updated_at
+        - expires_at
+        - audio_uploaded_at
+        - audio_object_ext
+        - recording_session_id
+        - active_transcript_id
+        - active_transcript_revision
+        - active_transcript_kind
+        - active_transcript_status
+        - transcript_revision_count
+      properties:
+        id: { type: string }
+        user_id: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time, nullable: true }
+        audio_uploaded_at: { type: string, format: date-time, nullable: true }
+        audio_object_ext: { type: string }
+        recording_session_id: { type: string }
+        active_transcript_id: { type: integer, nullable: true }
+        active_transcript_revision: { type: integer, nullable: true }
+        active_transcript_kind: { type: string, nullable: true }
+        active_transcript_status: { type: string, nullable: true }
+        transcript_revision_count: { type: integer }
+        session_summary_status: { type: string, nullable: true }
+        session_summary_error: { type: string, nullable: true }
+        asr_chunk_completed: { type: integer, nullable: true }
+        asr_chunk_total: { type: integer, nullable: true }
+
+    AdminConversationListResponse:
+      type: object
+      additionalProperties: false
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminConversationListItem"
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+
+    AdminTranscriptRevision:
+      type: object
+      additionalProperties: false
+      required: [id, revision, kind, status, created_at, updated_at]
+      properties:
+        id: { type: integer }
+        revision: { type: integer }
+        kind: { type: string }
+        status: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        meta:
+          type: object
+          nullable: true
+          additionalProperties: true
+        asr_chunk_completed: { type: integer, nullable: true }
+        asr_chunk_total: { type: integer, nullable: true }
+
+    AdminPipelineEventItem:
+      type: object
+      additionalProperties: false
+      required: [id, conversation_id, event_type, transcript_id, detail, created_at]
+      properties:
+        id: { type: string }
+        conversation_id: { type: string }
+        event_type: { type: string }
+        transcript_id: { type: integer, nullable: true }
+        detail:
+          type: object
+          nullable: true
+          additionalProperties: true
+        created_at: { type: string, format: date-time }
+
+    AdminPipelineEventsResponse:
+      type: object
+      additionalProperties: false
+      required: [items, total, limit, offset]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminPipelineEventItem"
+        total: { type: integer }
+        limit: { type: integer }
+        offset: { type: integer }
+
+    AdminPipelineEventsWaitResponse:
+      type: object
+      additionalProperties: false
+      required: [items, timed_out]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminPipelineEventItem"
+        timed_out: { type: boolean }
+
+    AdminRecordingSessionSummarySlice:
+      type: object
+      additionalProperties: false
+      required:
+        - recording_session_id
+        - status
+        - error
+        - meta
+        - created_at
+        - updated_at
+      properties:
+        recording_session_id: { type: string }
+        status: { type: string }
+        error: { type: string, nullable: true }
+        meta:
+          type: object
+          nullable: true
+          additionalProperties: true
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    AdminEmbeddingSlice:
+      type: object
+      additionalProperties: false
+      required: [id, transcript_id, kind, created_at, vector_dimension]
+      properties:
+        id: { type: integer }
+        transcript_id: { type: integer }
+        kind: { type: string }
+        created_at: { type: string, format: date-time }
+        vector_dimension: { type: integer }
+
+    AdminConversationDetailResponse:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - user_id
+        - created_at
+        - updated_at
+        - expires_at
+        - audio_uploaded_at
+        - audio_object_ext
+        - recording_session_id
+        - previous_conversation_id
+        - client_realtime_mode
+        - client_chunk_ms
+        - active_transcript_id
+        - product_conversation_url
+        - transcripts
+        - embeddings
+      properties:
+        id: { type: string }
+        user_id: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        expires_at: { type: string, format: date-time, nullable: true }
+        audio_uploaded_at: { type: string, format: date-time, nullable: true }
+        audio_object_ext: { type: string }
+        recording_session_id: { type: string }
+        previous_conversation_id: { type: string, nullable: true }
+        client_realtime_mode: { type: string, nullable: true }
+        client_chunk_ms: { type: integer, nullable: true }
+        active_transcript_id: { type: integer, nullable: true }
+        product_conversation_url: { type: string, nullable: true }
+        transcripts:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminTranscriptRevision"
+        recording_session_summary:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/AdminRecordingSessionSummarySlice"
+        embeddings:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminEmbeddingSlice"
+
+    AdminPipelineAsrProviderItem:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        enabled: { type: boolean }
+        model: { type: string, nullable: true }
+        impl: { type: string, nullable: true }
+
+    AdminPipelineAsrBlock:
+      type: object
+      additionalProperties: false
+      properties:
+        default_provider: { type: string }
+        recognition_model: { type: string, nullable: true }
+        providers:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminPipelineAsrProviderItem"
+
+    AdminPipelineDiarizationProviderItem:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        enabled: { type: boolean }
+        impl: { type: string, nullable: true }
+        model: { type: string, nullable: true }
+        device: { type: string, nullable: true }
+        hf_token_env: { type: string, nullable: true }
+        offline_models: { type: boolean }
+
+    AdminPipelineDiarizationBlock:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled: { type: boolean }
+        default_provider: { type: string, nullable: true }
+        turn_level_retranscription: { type: boolean }
+        providers:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminPipelineDiarizationProviderItem"
+
+    AdminPipelineLlmProviderItem:
+      type: object
+      additionalProperties: false
+      properties:
+        name: { type: string }
+        enabled: { type: boolean }
+        base_url: { type: string, nullable: true }
+        model: { type: string, nullable: true }
+
+    AdminPipelineLlmBlock:
+      type: object
+      additionalProperties: false
+      properties:
+        default_provider: { type: string }
+        session_summary_enabled: { type: boolean }
+        session_summary_max_input_chars: { type: integer }
+        providers:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminPipelineLlmProviderItem"
+
+    AdminPipelineEmbeddingsBlock:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled: { type: boolean }
+        provider: { type: string }
+        model: { type: string }
+        base_url: { type: string, nullable: true }
+        openai_base_url: { type: string, nullable: true }
+        timeout_seconds: { type: number }
+        max_input_chars: { type: integer }
+
+    AdminPipelineLimitsBlock:
+      type: object
+      additionalProperties: false
+      properties:
+        chunk_ms_min: { type: integer }
+        chunk_ms_max: { type: integer }
+        default_realtime_mode: { type: string }
+        allowed_realtime_modes:
+          type: array
+          items: { type: string }
+        max_window_ms: { type: integer }
+        autoprolong_enabled: { type: boolean }
+        autoprolong_tail_seconds: { type: number }
+
+    AdminPipelineSettingsResponse:
+      type: object
+      additionalProperties: false
+      required: [environment, asr, diarization, llm, embeddings, limits]
+      properties:
+        environment: { type: string }
+        asr:
+          $ref: "#/components/schemas/AdminPipelineAsrBlock"
+        diarization:
+          $ref: "#/components/schemas/AdminPipelineDiarizationBlock"
+        llm:
+          $ref: "#/components/schemas/AdminPipelineLlmBlock"
+        embeddings:
+          $ref: "#/components/schemas/AdminPipelineEmbeddingsBlock"
+        limits:
+          $ref: "#/components/schemas/AdminPipelineLimitsBlock"
 
     UserSettings:
       type: object

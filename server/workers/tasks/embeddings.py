@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from app.models import Embedding, Transcript
+from app.services.pipeline_event_write import record_pipeline_event
 
 from ..celery_app import celery_app
 from core.config import app_config
@@ -69,6 +70,13 @@ def index_transcript_embedding(self, transcript_id: int) -> dict:
                     vector=vec,
                 )
             )
+        record_pipeline_event(
+            db,
+            conversation_id=row.conversation_id,
+            event_type="embedding_indexed",
+            transcript_id=row.id,
+            detail={"transcript_id": row.id},
+        )
 
     logger.info("Indexed embedding transcript_id=%s dim=%s", transcript_id, len(vec))
     return {"status": "success", "dim": len(vec)}

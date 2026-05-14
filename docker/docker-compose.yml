@@ -11,12 +11,49 @@ services:
     environment:
       PYTHONPATH: /app/server
       VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
+      # Первый админ Ops-консоли (опционально): существующий пользователь — см. docs/ADMIN_OPS_CONSOLE.md §6.
+      VT_ADMIN_BOOTSTRAP_EMAIL: ${VT_ADMIN_BOOTSTRAP_EMAIL:-}
+      VT_ADMIN_BOOTSTRAP_USER_ID: ${VT_ADMIN_BOOTSTRAP_USER_ID:-}
     volumes:
       - ../configs:/app/configs:ro
     depends_on:
       postgres:
         condition: service_healthy
     command: ["python", "-m", "alembic", "upgrade", "head"]
+    networks:
+      - voice-transcriber
+
+  # Unit-тесты в изолированном контейнере (образ **dev**: main + pytest). Не поднимается с `up`.
+  # Запуск: из каталога docker/: `docker compose run --rm tests`
+  # Только админ-тесты: `docker compose run --rm tests python -m pytest tests/unit/test_admin_api_health.py tests/unit/test_admin_sprint2.py tests/unit/test_admin_sprint3.py tests/unit/test_admin_sprint4.py -q`
+  tests:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+      target: dev
+    environment:
+      PYTHONPATH: /app/server
+      VT_ENVIRONMENT: production
+      VT_WEBUI_ORIGIN: http://localhost:3002
+      VT_PUBLIC_API_URL: ${VT_PUBLIC_API_URL:-http://localhost:8002}
+      VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
+      VT_REDIS_URL: redis://redis:6379/0
+      VT_S3_ENDPOINT: http://minio:9000
+      VT_S3_BUCKET: voice-transcriber
+      VT_S3_ACCESS_KEY: minioadmin
+      VT_S3_SECRET_KEY: minioadmin
+      VT_JWT_SECRET: ${VT_JWT_SECRET:-}
+    volumes:
+      - ../configs:/app/configs:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      minio:
+        condition: service_started
     networks:
       - voice-transcriber
 
@@ -33,6 +70,14 @@ services:
       VT_WEBUI_ORIGIN: http://localhost:3002
       # Браузерные OAuth redirect_uri для Web UI должны совпадать с консолью провайдера (хост:порт снаружи Docker).
       VT_PUBLIC_API_URL: ${VT_PUBLIC_API_URL:-http://localhost:8002}
+      # Ops admin-webui OAuth: return URL allowlist (must match VITE_ADMIN_WEBUI_SELF_URL in admin-webui build).
+      VT_ADMIN_WEBUI_ORIGIN: ${VT_ADMIN_WEBUI_ORIGIN:-http://localhost:3003}
+      VT_ADMIN_WEBUI_ORIGINS: ${VT_ADMIN_WEBUI_ORIGINS:-}
+      # Аудит входов / lockout (см. docs/AUTH_AND_IDENTITY.md §8); значения из docker/.env при подстановке compose.
+      VT_AUTH_AUDIT_SALT: ${VT_AUTH_AUDIT_SALT:-}
+      VT_AUTH_SIGNIN_EVENTS_RETENTION_DAYS: ${VT_AUTH_SIGNIN_EVENTS_RETENTION_DAYS:-}
+      VT_AUTH_LOCKOUT_ENABLED: ${VT_AUTH_LOCKOUT_ENABLED:-}
+      VT_AUTH_LOGIN_AUDIT_ENABLED: ${VT_AUTH_LOGIN_AUDIT_ENABLED:-}
       # Срок жизни refresh-сессии сервиса в днях (C7.2); см. server/app/services/service_refresh_token.py
       VT_REFRESH_TOKEN_TTL_DAYS: ${VT_REFRESH_TOKEN_TTL_DAYS:-90}
       # Необязательно: явный список Origin для CORS (axios withCredentials). Пусто = localhost/127 + regex.
@@ -88,6 +133,88 @@ services:
       timeout: 8s
       retries: 6
       start_period: 40s
+    networks:
+      - voice-transcriber
+
+  # Ops / Admin API (docs/ADMIN_OPS_CONSOLE.md): отдельный процесс, тот же JWT + таблица admin_memberships.
+  admin-api:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.api
+    ports:
+      - "8003:8000"
+    environment:
+      PYTHONPATH: /app/server
+      VT_ENVIRONMENT: production
+      VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
+      VT_REDIS_URL: redis://redis:6379/0
+      # Те же параметры объекта, что у `api` (общий configs + overrides; см. VT_S3_* у сервиса api).
+      VT_S3_ENDPOINT: http://minio:9000
+      VT_S3_BUCKET: voice-transcriber
+      VT_S3_ACCESS_KEY: minioadmin
+      VT_S3_SECRET_KEY: minioadmin
+      VT_JWT_SECRET: ${VT_JWT_SECRET:-}
+      # Проверка «жив ли продуктовый API» изнутри compose (см. GET /admin/api/v1/infrastructure).
+      VT_PUBLIC_API_URL: http://api:8000
+      # Шаблон ссылки на разговор в основном Web UI (карточка админа); хост снаружи Docker.
+      VT_WEBUI_ORIGIN: ${VT_WEBUI_ORIGIN:-http://localhost:3002}
+      VT_ADMIN_EXTERNAL_TOOLS_JSON: ${VT_ADMIN_EXTERNAL_TOOLS_JSON:-}
+      VT_ADMIN_PRODUCT_CONVERSATION_URL_TEMPLATE: ${VT_ADMIN_PRODUCT_CONVERSATION_URL_TEMPLATE:-}
+    volumes:
+      - ../configs:/app/configs:ro
+      - ../server/logs:/app/server/logs
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      minio:
+        condition: service_started
+      api:
+        condition: service_healthy
+    command:
+      [
+        "python",
+        "-m",
+        "uvicorn",
+        "admin_api.main:app",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        "8000",
+      ]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)",
+        ]
+      interval: 15s
+      timeout: 8s
+      retries: 5
+      start_period: 25s
+    networks:
+      - voice-transcriber
+
+  # Статическая Ops-консоль: OAuth (тот же продуктовый API) + ручной JWT, вызовы Admin API.
+  admin-webui:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.admin-webui
+      args:
+        # Браузер на хосте обращается к Admin API по проброшенному порту 8003.
+        VITE_ADMIN_API_BASE_URL: http://localhost:8003
+        VITE_PUBLIC_API_BASE_URL: ${VT_PUBLIC_API_URL:-http://localhost:8002}
+        VITE_ADMIN_WEBUI_SELF_URL: ${VT_ADMIN_WEBUI_ORIGIN:-http://localhost:3003}
+    ports:
+      - "3003:3000"
+    depends_on:
+      admin-api:
+        condition: service_healthy
     networks:
       - voice-transcriber
 

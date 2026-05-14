@@ -12,6 +12,7 @@ from pathlib import Path
 from uuid import UUID
 
 from app.models import Conversation, Transcript, User
+from app.services.pipeline_event_write import record_pipeline_event
 
 from ..celery_app import celery_app
 from core.audio_format import MIN_AUDIO_CONTENT_BYTES
@@ -270,6 +271,13 @@ def run_diarization(
             )
             db.add(out_row)
             db.flush()
+            record_pipeline_event(
+                db,
+                conversation_id=conv_uuid,
+                event_type="diarization_started",
+                transcript_id=int(out_row.id),
+                detail={"transcript_id": int(out_row.id), "revision": next_rev},
+            )
 
         with session_scope() as db:
             conv = (
@@ -439,6 +447,13 @@ def run_diarization(
                 row.transcript_json = transcript
                 row.transcript_md = md
                 row.status = "success"
+                record_pipeline_event(
+                    db,
+                    conversation_id=conv_uuid,
+                    event_type="diarization_completed",
+                    transcript_id=row.id,
+                    detail={"transcript_id": row.id, "revision": row.revision},
+                )
 
                 conv = db.query(Conversation).filter(Conversation.id == conv_uuid).first()
                 if conv is not None:
@@ -485,6 +500,13 @@ def run_diarization(
                     meta = dict(last.meta) if isinstance(last.meta, dict) else {}
                     meta["diarization_error"] = str(e)
                     last.meta = meta
+                    record_pipeline_event(
+                        db,
+                        conversation_id=conv_uuid,
+                        event_type="diarization_failed",
+                        transcript_id=last.id,
+                        detail={"reason_code": "diarization_exception"},
+                    )
         except Exception:
             pass
         logger.error(f"Diarization failed for {conversation_id}: {e}")

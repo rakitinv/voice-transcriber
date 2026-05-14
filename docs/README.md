@@ -14,7 +14,7 @@
 - **[PHASE_B_ACCEPTANCE.md](./PHASE_B_ACCEPTANCE.md)** — ручной чеклист приёмки Phase B (realtime WS, расширение Chromium, автотесты `browser-extension`).
 - **[PHASE_C_ACCEPTANCE.md](./PHASE_C_ACCEPTANCE.md)** — приёмка блока **C7 + родительский C1**: порядок проверки OAuth/refresh/WS, diarization pipeline, ссылки на автотесты.
 - **[adr/](./adr/)** — архитектурные решения (ADR).
-- **[ADMIN_OPS_CONSOLE.md](./ADMIN_OPS_CONSOLE.md)** — требования **v1.0 (baseline)** к отдельной административной Ops-консоли (учётки, обзор пайплайна, ссылки на Grafana/Flower; §10 — оставшиеся решения проектирования).
+- **[ADMIN_OPS_CONSOLE.md](./ADMIN_OPS_CONSOLE.md)** — требования **v1.0 (baseline)** к отдельной Ops-консоли; **фактическая реализация** и backlog — §4.2, чеклисты [ADMIN_OPS_SPRINT2_CHECKLIST.md](./ADMIN_OPS_SPRINT2_CHECKLIST.md) … [ADMIN_OPS_SPRINT8_CHECKLIST.md](./ADMIN_OPS_SPRINT8_CHECKLIST.md), [ADMIN_OPS_ROADMAP.md](./ADMIN_OPS_ROADMAP.md). Код: `server/admin_api/`, `admin-webui/`, маршруты в [`../openapi.yaml`](../openapi.yaml).
 
 ### Phase C (C2–C6): настройки и где смотреть
 

@@ -1,4 +1,17 @@
-from core.user_language import llm_summary_output_language
+from core.user_language import (
+    default_asr_language_hint_from_preferences,
+    llm_summary_output_language,
+)
+
+
+def test_asr_hint_auto_is_none():
+    assert default_asr_language_hint_from_preferences(None) is None
+    assert default_asr_language_hint_from_preferences({}) is None
+    assert default_asr_language_hint_from_preferences({"default_language": "auto"}) is None
+
+
+def test_asr_hint_explicit():
+    assert default_asr_language_hint_from_preferences({"default_language": "en"}) == "en"
 
 
 def test_llm_summary_auto_maps_to_russian():

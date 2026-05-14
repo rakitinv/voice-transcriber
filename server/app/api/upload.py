@@ -4,9 +4,7 @@ File upload endpoint for batch transcription.
 
 from __future__ import annotations
 
-import tempfile
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
@@ -31,25 +29,17 @@ from core.db import get_db
 from core.logging import logger
 from core.metrics import UPLOAD_ACCEPTED_TOTAL
 from core.s3 import storage
-from workers.tasks.asr import transcribe_file
+from core.user_language import default_asr_language_hint_from_preferences
 from workers.celery_app import celery_app
 from ..models import Conversation, User
 from .dependencies import get_current_user
 
 router = APIRouter(prefix="/upload", tags=["upload"])
 
-def _default_language_hint(user: User) -> str | None:
-    """
-    Return a language hint for ASR (ISO 639-1), or None for auto-detect.
 
-    UI stores it in `user.preferences.default_language`.
-    Treat "", "auto", "—" as auto-detect.
-    """
-    prefs = user.preferences if isinstance(user.preferences, dict) else {}
-    raw = str(prefs.get("default_language", "")).strip().lower()
-    if not raw or raw in ("auto", "—", "-"):
-        return None
-    return raw
+def _default_language_hint(user: User) -> str | None:
+    """Return a language hint for ASR (ISO 639-1), or None for auto-detect."""
+    return default_asr_language_hint_from_preferences(user.preferences)
 
 
 @router.post("", status_code=status.HTTP_202_ACCEPTED)

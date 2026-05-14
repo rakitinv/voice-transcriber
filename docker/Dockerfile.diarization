@@ -33,7 +33,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 # Some environments (corporate mirrors, restricted indices) may not have `lightning`.
 # Force PyPI for diarization image so `pyannote-audio` can resolve it.
-ENV PIP_INDEX_URL=https://pypi.org/simple
+# Default pip timeout (15s) is too low for torch + nvidia-* wheels on slow links.
+ENV PIP_INDEX_URL=https://pypi.org/simple \
+    PIP_DEFAULT_TIMEOUT=600 \
+    PIP_RETRIES=10
 
 # Install main + optional diarization group (pyannote stack). Keep poetry.lock so the
 # solver cannot silently omit pyannote/torch (see README / issue: rm -f poetry.lock broke installs).

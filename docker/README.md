@@ -7,6 +7,8 @@ Run the full speech transcription stack locally with Docker Compose.
 | Service  | Port(s) на хосте | Описание |
 |----------|------------------|----------|
 | **api**  | **8002**→8000 | FastAPI (см. `ports` в compose) |
+| **admin-api** | **8003**→8000 | Отдельный Admin / Ops API ([docs/ADMIN_OPS_CONSOLE.md](../docs/ADMIN_OPS_CONSOLE.md)): тот же JWT, проверка таблицы `admin_memberships` |
+| **admin-webui** | **3003**→3000 | Ops-консоль: OAuth через продуктовый **api** (`client=admin`) или JWT вручную; см. [AUTH_AND_IDENTITY.md §8](../docs/AUTH_AND_IDENTITY.md) |
 | **webui**| **3002**→3000 | React (Vite build) |
 | **worker** | —         | Celery: **`VT_MAIN_WORKER_QUEUES`** по умолчанию **asr_fast**, **asr**, **llm**, **cleanup** |
 | **worker-llm** | **`scale_llm`** | Только очередь **llm** (§7.6 summary, embeddings); поднимайте вместе с **`VT_MAIN_WORKER_QUEUES=asr_fast,asr,cleanup`** у **worker**, чтобы не было двух потребителей **llm** |
@@ -15,6 +17,7 @@ Run the full speech transcription stack locally with Docker Compose.
 | **diarization-worker** | — | Diarization Celery worker: **CPU**-сборка PyTorch (`build.args.DIARIZATION_TORCH=cpu`), очередь **diarization** (compose profile `diarization`) |
 | **diarization-worker-gpu** | — | Diarization Celery worker: **CUDA**-сборка PyTorch (`DIARIZATION_TORCH=cuda`), профиль compose **`gpu`** |
 | **migrate** | —        | Однократно: `alembic upgrade head` |
+| **tests** | — | **Не** стартует с `up`. Образ **dev** (pytest в слое образа): `docker compose run --rm tests` — см. раздел [Unit tests](#unit-tests-compose-service-tests) |
 | **postgres** | 5435→5432 (`POSTGRES_PUBLISH_PORT`) | PostgreSQL 16 |
 | **redis**  | 6382→6379 (`REDIS_PUBLISH_PORT`) | Redis 7 |
 | **minio**  | 9012→9000, 9013→9001 (`MINIO_*_PUBLISH_PORT`) | MinIO S3 + консоль |
@@ -44,6 +47,8 @@ docker compose up --build
 | **Prometheus metrics** | http://localhost:8002/metrics |
 | **WebSocket** | `ws://localhost:8002/ws/audio/{id}`, `ws://localhost:8002/ws/transcript/{id}` — см. [docs/WEBSOCKET.md](../docs/WEBSOCKET.md) |
 | **Swagger** | http://localhost:8002/docs |
+| **Admin API** | http://localhost:**8003** (`/health`, защищённые маршруты под `/admin/api/v1/…`) |
+| **Admin Web UI** | http://localhost:**3003** (минимальная консоль спринта 2; вставка access JWT) |
 | **MinIO Console** | http://localhost:**9013** (minioadmin / minioadmin) |
 | **MinIO S3 API** | http://localhost:**9012** |
 
@@ -52,6 +57,53 @@ docker compose up --build
 **Зависимости старта:** сервис **`migrate`** выполняет Alembic до запуска **api**; **webui** стартует после **healthy** у **api** (healthcheck по `/health`).
 
 Ручная приёмка Phase A: [docs/PHASE_A_ACCEPTANCE.md](../docs/PHASE_A_ACCEPTANCE.md).
+
+## Admin / Ops API (baseline)
+
+Отдельный сервис **`admin-api`** (порт хоста **8003**→8000 в compose): см. [docs/ADMIN_OPS_CONSOLE.md](../docs/ADMIN_OPS_CONSOLE.md). Использует **тот же** `VT_JWT_SECRET` / конфиг подписи JWT, что и продуктовый **api**; доступ к маршрутам `/admin/api/v1/…` только при наличии строки в таблице **`admin_memberships`**. **S3 / MinIO:** в `docker-compose.yml` для **`admin-api`** заданы те же **`VT_S3_ENDPOINT`**, **`VT_S3_BUCKET`**, **`VT_S3_ACCESS_KEY`**, **`VT_S3_SECRET_KEY`**, что и для **`api`**, и добавлен **`depends_on: minio`** — переопределения через env обрабатываются так же, как у основного API (`server/core/config.py`).
+
+**Первый администратор (bootstrap при миграции):** задайте в `.env` рядом с compose или в окружении сервиса **`migrate`** один из параметров (пользователь уже должен существовать в `users`, например после первого входа через Web UI):
+
+- **`VT_ADMIN_BOOTSTRAP_EMAIL`** — email учётной записи;
+- или **`VT_ADMIN_BOOTSTRAP_USER_ID`** — UUID пользователя.
+
+Затем выполните миграции (`docker compose run --rm migrate` или полный `up`). Повторный `upgrade` с тем же email не создаст дубликат (`ON CONFLICT DO NOTHING`).
+
+Проверка без UI: `GET http://localhost:8003/health` (без авторизации); `GET http://localhost:8003/admin/api/v1/me` с заголовком `Authorization: Bearer <access JWT>` выданным основным **api** после входа. Цепочка **admin-webui** (порт **3003**) + **admin-api** (**8003**): откройте консоль — **«Google» / «Яндекс»** ведут на `GET /api/auth/...` продуктового API; после провайдера браузер возвращается на админку с токенами в hash. На сервисе **api** задайте **`VT_ADMIN_WEBUI_ORIGIN`** (или **`VT_ADMIN_WEBUI_ORIGINS`**, через запятую) в том же origin, что и у собранной админки (`VITE_ADMIN_WEBUI_SELF_URL` при сборке образа). **Консоль Google/Яндекс:** redirect/callback остаётся только URL API (`…/api/auth/*/callback`), отдельно регистрировать хост админки не нужно. Ручной ввод JWT по-прежнему возможен. В БД после миграций: в т.ч. **`pipeline_events`**, колонки **`transcripts.asr_chunk_*`** (прогресс нарезки ASR), ранее — `admin_memberships`, `admin_audit_events`, `auth_signin_events` (см. `server/alembic/versions/`).
+
+Переменные окружения сервиса **`admin-api`** (опционально, см. также `configs/server.yaml` → `admin_console`):
+
+| Переменная | Назначение |
+|------------|------------|
+| **`VT_WEBUI_ORIGIN`** | Базовый URL основного Web UI; если не задан явный шаблон, для карточки разговора подставляется `{VT_WEBUI_ORIGIN}/conversations/{conversation_id}`. |
+| **`VT_ADMIN_EXTERNAL_TOOLS_JSON`** | JSON-массив `[{"name":"Flower","url":"http://..."}]` — полностью заменяет список ссылок из YAML для деплоя. |
+| **`VT_ADMIN_PRODUCT_CONVERSATION_URL_TEMPLATE`** | Явный шаблон deep-link (должен содержать подстроку `{conversation_id}`). |
+
+## Unit tests (compose service `tests`)
+
+Сервис **`tests`** собирается из `docker/Dockerfile.api` со стадией **`dev`** (`poetry install --with dev`: **pytest** и остальные dev-зависимости зафиксированы в образе, не теряются при пересборке в отличие от ручного `pip install` в контейнере **api**).
+
+Запуск из каталога **`docker/`** (нужны **postgres**, **redis**, **minio** — сервис подтянет их через `depends_on`, миграции через **`migrate`**):
+
+```bash
+cd docker
+docker compose build tests
+docker compose run --rm tests
+```
+
+По умолчанию выполняется `pytest tests/unit` (см. `CMD` в Dockerfile, стадия **dev**). Свой набор тестов:
+
+```bash
+docker compose run --rm tests python -m pytest tests/unit/test_admin_sprint4.py -q --tb=short
+```
+
+Типичный набор **админских** unit-тестов (спринты 2–8):
+
+```bash
+docker compose run --rm tests python -m pytest tests/unit/test_admin_api_health.py tests/unit/test_admin_sprint2.py tests/unit/test_admin_sprint3.py tests/unit/test_admin_sprint4.py tests/unit/test_admin_sprint5.py tests/unit/test_admin_sprint7.py tests/unit/test_admin_sprint8.py -q --tb=short
+```
+
+Внутри compose доступен хост **`minio:9000`**, поэтому тесты, обращающиеся к S3 через boto3 при импорте воркеров, не падают с ошибкой DNS, как на хосте Windows без Docker.
 
 ## Порт Postgres на хосте
 
@@ -159,6 +211,8 @@ Then rebuild the webui image: `docker compose build webui`.
 - Сервис **`diarization-worker-gpu`** — `args: { DIARIZATION_TORCH: cuda }`, профиль **`gpu`**. Поднимается явно: `docker compose --profile gpu up -d …`.
 
 **Важно:** оба воркера слушают одну и ту же очередь Celery **`diarization`**. Не запускайте CPU и GPU воркеры одновременно, если не хотите дублировать обработку одной и той же очереди. Обычно в проде активен **ровно один** diarization-сервис.
+
+**Сборка и сеть:** образ diarization ставит PyTorch и колёса **`nvidia-*`** (очень большие файлы с PyPI). Первая сборка часто занимает **десятки минут** и требует устойчивого интернета. В `Dockerfile.diarization` заданы увеличенные **`PIP_DEFAULT_TIMEOUT`** и **`PIP_RETRIES`**, чтобы реже ловить `Read timed out` / `Cannot install nvidia-*`. После обрыва достаточно повторить `docker compose build …` — слой с `--mount=type=cache` для pip обычно не качает всё заново. Если diarization вам не нужен, не включайте профиль **`diarization`** (и не задавайте `COMPOSE_PROFILES`, который подтягивает этот сервис без явного флага).
 
 ### Первое развёртывание: какой сервис выбрать
 

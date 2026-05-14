@@ -4,16 +4,65 @@ TTL cleanup tasks.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_
+from sqlalchemy import and_, delete
 
 from ..celery_app import celery_app
-from app.models import Conversation
+from app.models import AuthSigninEvent, Conversation, PipelineEvent
 from core.config import app_config
 from core.db import session_scope
 from core.logging import logger
 from core.s3 import storage
+
+
+@celery_app.task(name="workers.tasks.cleanup.old_auth_signin_events", bind=True)
+def cleanup_old_auth_signin_events(self) -> dict:
+    """
+    Delete product login audit rows older than ``auth.login_audit.retention_days``.
+
+    ``retention_days <= 0`` disables this job (no automatic deletion).
+    """
+    days = int(app_config.auth.login_audit.retention_days)
+    if days <= 0:
+        logger.info("auth_signin_events cleanup skipped (retention_days<=0)")
+        return {"status": "skipped", "deleted": 0, "reason": "retention_disabled"}
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    try:
+        with session_scope() as session:
+            res = session.execute(delete(AuthSigninEvent).where(AuthSigninEvent.created_at < cutoff))
+            deleted = res.rowcount or 0
+        logger.info("auth_signin_events cleanup: deleted %s rows older than %s days", deleted, days)
+        return {"status": "success", "deleted": deleted, "cutoff": cutoff.isoformat()}
+    except Exception as e:
+        logger.error("auth_signin_events cleanup failed: %s", e)
+        raise
+
+
+@celery_app.task(name="workers.tasks.cleanup.old_pipeline_events", bind=True)
+def cleanup_old_pipeline_events(self) -> dict:
+    """
+    Delete pipeline_events rows older than ``auth.login_audit.retention_days``.
+
+    Same retention knob as auth_signin_events (``VT_AUTH_SIGNIN_EVENTS_RETENTION_DAYS`` / YAML
+    ``auth.login_audit.retention_days``). ``retention_days <= 0`` disables this job.
+    """
+    days = int(app_config.auth.login_audit.retention_days)
+    if days <= 0:
+        logger.info("pipeline_events cleanup skipped (retention_days<=0)")
+        return {"status": "skipped", "deleted": 0, "reason": "retention_disabled"}
+
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    try:
+        with session_scope() as session:
+            res = session.execute(delete(PipelineEvent).where(PipelineEvent.created_at < cutoff))
+            deleted = res.rowcount or 0
+        logger.info("pipeline_events cleanup: deleted %s rows older than %s days", deleted, days)
+        return {"status": "success", "deleted": deleted, "cutoff": cutoff.isoformat()}
+    except Exception as e:
+        logger.error("pipeline_events cleanup failed: %s", e)
+        raise
 
 
 @celery_app.task(name="workers.tasks.cleanup.expired_conversations", bind=True)
@@ -77,4 +126,6 @@ def schedule_cleanup(self) -> dict:
     This task should be scheduled via Celery Beat.
     """
     cleanup_expired_conversations.delay()
+    cleanup_old_auth_signin_events.delay()
+    cleanup_old_pipeline_events.delay()
     return {"status": "scheduled"}

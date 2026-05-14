@@ -30,13 +30,20 @@ def _cors_allow_origins() -> list[str]:
     if raw:
         return [x.strip() for x in raw.split(",") if x.strip()]
     webui = (os.environ.get("VT_WEBUI_ORIGIN") or "http://localhost:3002").strip().rstrip("/")
+    admin_ui = (os.environ.get("VT_ADMIN_WEBUI_ORIGIN") or "").strip().rstrip("/")
     defaults = [
         webui,
         "http://localhost:3002",
         "http://127.0.0.1:3002",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
+        "http://localhost:3003",
+        "http://127.0.0.1:3003",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
     ]
+    if admin_ui:
+        defaults = [admin_ui, *defaults]
     out: list[str] = []
     seen: set[str] = set()
     for o in defaults:

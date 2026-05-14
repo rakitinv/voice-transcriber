@@ -11,9 +11,11 @@ from pathlib import Path
 from uuid import UUID
 
 from app.models import Conversation, Transcript, User
+from app.services.pipeline_event_write import record_pipeline_event
 
 from ..celery_app import celery_app
-from celery import chord  # type: ignore
+from celery import chain, chord  # type: ignore
+from sqlalchemy import func, update
 from core.asr_chunk import transcribe_audio_chunk_bytes
 from core.audio_format import MIN_AUDIO_CONTENT_BYTES
 from core.config import app_config
@@ -138,6 +140,23 @@ def _slice_media_to_wav_16k_mono(src_media: Path, start_s: float, end_s: float) 
         raise
 
 
+@celery_app.task(name="workers.tasks.asr.record_asr_chunk_done", bind=True)
+def record_asr_chunk_done(self, *, transcript_id: int) -> None:
+    """Increment completed parallel ASR slice count (atomic; no transcript text)."""
+    tid = int(transcript_id)
+    with session_scope() as db:
+        db.execute(
+            update(Transcript)
+            .where(Transcript.id == tid)
+            .values(
+                asr_chunk_completed=func.least(
+                    func.coalesce(Transcript.asr_chunk_total, 0),
+                    func.coalesce(Transcript.asr_chunk_completed, 0) + 1,
+                )
+            )
+        )
+
+
 @celery_app.task(name="workers.tasks.asr.transcribe_slice", bind=True)
 def transcribe_slice(
     self,
@@ -236,6 +255,15 @@ def finalize_parallel_transcript(
             if row is not None:
                 row.status = "failed"
                 row.meta = {**(row.meta or {}), "error": msg[:1000]}
+                row.asr_chunk_total = None
+                row.asr_chunk_completed = None
+                record_pipeline_event(
+                    db,
+                    conversation_id=conv_uuid,
+                    event_type="asr_failed",
+                    transcript_id=int(transcript_id),
+                    detail={"reason_code": "parallel_chunk_errors"},
+                )
         return {"status": "failed", "error": msg[:1000]}
 
     merged: list[dict] = []
@@ -268,6 +296,15 @@ def finalize_parallel_transcript(
         row.transcript_json = transcript
         row.transcript_md = md
         row.status = "success"
+        row.asr_chunk_total = None
+        row.asr_chunk_completed = None
+        record_pipeline_event(
+            db,
+            conversation_id=conv_uuid,
+            event_type="asr_completed",
+            transcript_id=int(transcript_id),
+            detail={"transcript_id": int(transcript_id)},
+        )
 
         conv = db.query(Conversation).filter(Conversation.id == conv_uuid).first()
         if conv is not None:
@@ -363,6 +400,13 @@ def transcribe_file(
             db.add(trow)
             db.flush()  # allocate trow.id
             trow_id = int(trow.id)
+            record_pipeline_event(
+                db,
+                conversation_id=conv_uuid,
+                event_type="asr_started",
+                transcript_id=trow_id,
+                detail={"transcript_id": trow_id},
+            )
 
         audio_data = storage.download_audio(
             user_id, conversation_id, audio_object_ext=ext, decrypt=True
@@ -429,19 +473,6 @@ def transcribe_file(
                         meta["chunk_seconds"] = chunk_s
                         meta["chunk_overlap_seconds"] = overlap_s
                         meta["parallel_chunks"] = True
-                        # Persist updated meta on the running transcript row (best-effort).
-                        with session_scope() as db:
-                            row = (
-                                db.query(Transcript)
-                                .filter(
-                                    Transcript.id == trow_id,
-                                    Transcript.conversation_id == conv_uuid,
-                                    Transcript.user_id == user_uuid,
-                                )
-                                .first()
-                            )
-                            if row is not None:
-                                row.meta = dict(meta)
 
                         header = []
                         t0 = 0.0
@@ -454,23 +485,36 @@ def transcribe_file(
                                 + chunk_s
                                 + (overlap_s if (t0 + chunk_s) < dur else 0.0),
                             )
-                            header.append(
-                                celery_app.signature(
-                                    "workers.tasks.asr.transcribe_slice",
-                                    kwargs={
-                                        "user_id": user_id,
-                                        "conversation_id": conversation_id,
-                                        "language": language,
-                                        "audio_object_ext": ext,
-                                        "start_s": float(s0),
-                                        "end_s": float(s1),
-                                        "trim_before_s": (float(t0) if idx > 0 else None),
-                                    },
-                                    queue="asr_fast",
-                                )
+                            slice_sig = transcribe_slice.s(
+                                user_id,
+                                conversation_id,
+                                language=language,
+                                audio_object_ext=ext,
+                                start_s=float(s0),
+                                end_s=float(s1),
+                                trim_before_s=(float(t0) if idx > 0 else None),
+                            ).set(queue="asr_fast")
+                            bump_sig = record_asr_chunk_done.si(transcript_id=trow_id).set(
+                                queue="asr_final"
                             )
+                            header.append(chain(slice_sig, bump_sig))
                             idx += 1
                             t0 += chunk_s
+
+                        with session_scope() as db:
+                            row = (
+                                db.query(Transcript)
+                                .filter(
+                                    Transcript.id == trow_id,
+                                    Transcript.conversation_id == conv_uuid,
+                                    Transcript.user_id == user_uuid,
+                                )
+                                .first()
+                            )
+                            if row is not None:
+                                row.meta = dict(meta)
+                                row.asr_chunk_total = len(header)
+                                row.asr_chunk_completed = 0
 
                         body = celery_app.signature(
                             "workers.tasks.asr.finalize_parallel_transcript",
@@ -497,6 +541,34 @@ def transcribe_file(
                         # Record actual settings for observability.
                         meta["chunk_seconds"] = chunk_s
                         meta["chunk_overlap_seconds"] = overlap_s
+
+                        n_chunks = 0
+                        tv = 0.0
+                        while tv < dur:
+                            n_chunks += 1
+                            tv += chunk_s
+                        with session_scope() as db:
+                            r2 = (
+                                db.query(Transcript)
+                                .filter(
+                                    Transcript.id == trow_id,
+                                    Transcript.conversation_id == conv_uuid,
+                                    Transcript.user_id == user_uuid,
+                                )
+                                .first()
+                            )
+                            if r2 is not None:
+                                prev = dict(r2.meta or {})
+                                prev.update(
+                                    {
+                                        k: meta[k]
+                                        for k in ("chunk_seconds", "chunk_overlap_seconds")
+                                        if k in meta
+                                    }
+                                )
+                                r2.meta = prev
+                                r2.asr_chunk_total = n_chunks
+                                r2.asr_chunk_completed = 0
 
                         merged_segments: list = []
                         t0 = 0.0
@@ -533,6 +605,21 @@ def transcribe_file(
 
                             idx += 1
                             t0 += chunk_s
+                            with session_scope() as db:
+                                r2 = (
+                                    db.query(Transcript)
+                                    .filter(
+                                        Transcript.id == trow_id,
+                                        Transcript.conversation_id == conv_uuid,
+                                        Transcript.user_id == user_uuid,
+                                    )
+                                    .first()
+                                )
+                                if r2 is not None and r2.asr_chunk_total:
+                                    r2.asr_chunk_completed = min(
+                                        int(r2.asr_chunk_total),
+                                        int(r2.asr_chunk_completed or 0) + 1,
+                                    )
 
                         merged_segments.sort(key=lambda x: float(x.get("start", 0.0)))
                         transcript = {"segments": merged_segments}
@@ -591,6 +678,15 @@ def transcribe_file(
             row.transcript_json = transcript
             row.transcript_md = md
             row.status = "success"
+            row.asr_chunk_total = None
+            row.asr_chunk_completed = None
+            record_pipeline_event(
+                db,
+                conversation_id=conv_uuid,
+                event_type="asr_completed",
+                transcript_id=row.id,
+                detail={"transcript_id": row.id},
+            )
 
             conv = db.query(Conversation).filter(Conversation.id == conv_uuid).first()
             if conv is not None:
@@ -632,6 +728,15 @@ def transcribe_file(
                 )
                 if last is not None:
                     last.status = "failed"
+                    last.asr_chunk_total = None
+                    last.asr_chunk_completed = None
+                    record_pipeline_event(
+                        db,
+                        conversation_id=conv_uuid,
+                        event_type="asr_failed",
+                        transcript_id=last.id,
+                        detail={"reason_code": "exception"},
+                    )
         except Exception:
             pass
         logger.error(f"ASR transcription failed for {conversation_id}: {e}")

@@ -17,6 +17,7 @@ node_modules/
 **/node_modules/
 browser-extension/dist/
 webui/dist/
+admin-webui/dist/
 
 # Python virtual envs / caches (repo-root convenience)
 .venv/

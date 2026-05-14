@@ -25,4 +25,22 @@ auth:
   yandex:
     client_id: "e7e743fa8de649bbbdce2c873d868265"
     client_secret: "95877b39703d4c26ab445544b0a9f1d6"
+  # ADMIN_OPS sprint 6: Redis-backed IP lockout after failed refresh / bad API key (see AUTH_AND_IDENTITY.md §9).
+  lockout:
+    enabled: true
+    refresh_invalid_max_per_ip: 40
+    api_key_invalid_max_per_ip: 80
+    window_seconds: 900
+    block_seconds: 900
+  login_audit:
+    enabled: true
+    include_client_fingerprint: true
+    # Удаление старых строк auth_signin_events и pipeline_events (Celery cleanup); 0 — не удалять автоматически.
+    retention_days: 90
+
+# Ops-консоль (docs/ADMIN_OPS_CONSOLE.md): внешние ссылки и шаблон deep-link в Web UI.
+# В Docker можно переопределить список целиком через VT_ADMIN_EXTERNAL_TOOLS_JSON.
+admin_console:
+  external_tools: []
+  # product_conversation_url_template: "http://localhost:3002/conversations/{conversation_id}"
 

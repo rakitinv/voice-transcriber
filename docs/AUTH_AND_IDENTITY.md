@@ -81,9 +81,24 @@
 
 ---
 
-## 8. История документа
+## 8. Политика учётных данных (MVP §6 продукта, 2026-05)
+
+На текущем этапе **основной вход в продукт** — OAuth провайдеров (Google, Яндекс) и выдача **короткого access JWT** плюс **сервисного refresh** (`POST /api/auth/refresh`). Отдельного потока **регистрации по email/паролю** в API нет; утилиты хеширования пароля в коде зарезервированы на будущее.
+
+1. **Пароли (если появятся в API):** минимальная длина **12** символов; без ведущих/завершающих пробелов; не короче и не длиннее разумных пределов реализации; классы символов — минимум **три из четырёх**: строчные, прописные, цифры, спецсимволы (см. `server/app/services/password_policy.py`).
+2. **Блокировка перебора (lockout):** по **IP клиента** (с учётом `X-Forwarded-For`, первый hop) в **Redis** ведутся счётчики неуспешных попыток для **`POST /api/auth/refresh`** (невалидный refresh) и для заголовка **`X-VT-Api-Key`** (неверный ключ). Пороги и окна задаются в `configs/server.yaml` → `auth.lockout` и переменными окружения `VT_AUTH_LOCKOUT_ENABLED`, `VT_REDIS_URL`. При превышении порога на окно ответ **`429 Too Many Requests`** с заголовком `Retry-After`. Успешный refresh сбрасывает счётчик неуспехов для данного IP (смягчение для общих NAT).
+3. **Ops admin-webui:** вход через те же `GET /api/auth/google|yandex` с `client=admin` и `next=<origin SPA>`; редирект с токенами в fragment на **origin из allowlist** (`VT_ADMIN_WEBUI_ORIGIN` / `VT_ADMIN_WEBUI_ORIGINS`). У **Google/Яндекс** в консоли OAuth по-прежнему только **callback API** (`…/api/auth/*/callback`), без отдельного redirect URI на хост админки.
+4. **Аудит входа:** таблица **`auth_signin_events`** (миграция Alembic): исход `success` / `failure`, канал (`oauth_web`, `oauth_extension`, `refresh`, `api_key`, `oauth_link`), код причины, опционально `provider`, опционально `user_id`, опционально **отпечаток клиента** (SHA-256 от **`VT_AUTH_AUDIT_SALT`** + IP — **не** хранится сырое значение IP в явном виде). **Срок хранения** задаётся без правки кода: `configs/server.yaml` → `auth.login_audit.retention_days` (по умолчанию 90) или переменная окружения **`VT_AUTH_SIGNIN_EVENTS_RETENTION_DAYS`**. Значение **`0`** отключает автоматическое удаление. Очистка выполняется задачей Celery **`workers.tasks.cleanup.old_auth_signin_events`** (ставится в очередь вместе с `workers.tasks.cleanup.schedule_cleanup` → `cleanup_expired_conversations`); при отсутствии Beat задачу можно вызывать вручную или повесить на внешний cron. Тем же сроком (`retention_days`) по расписанию удаляются и строки **`pipeline_events`** (лента пайплайна Ops-консоли) — задача **`workers.tasks.cleanup.old_pipeline_events`**.
+
+---
+
+## 9. История документа
 
 | Версия | Дата | Изменение |
 |--------|------|------------|
+| 1.5 | 2026-05-14 | §8: та же `retention_days` / `VT_AUTH_SIGNIN_EVENTS_RETENTION_DAYS` для очистки `pipeline_events` |
+| 1.4 | 2026-05-14 | §8: OAuth admin-webui (`client=admin`, VT_ADMIN_WEBUI_*); консоль провайдера — только API callback |
+| 1.3 | 2026-05-14 | §8: настраиваемая ретенция `auth_signin_events` (YAML/env + Celery cleanup) |
+| 1.2 | 2026-05-14 | §8: политика паролей на будущее, lockout refresh/API key, аудит `auth_signin_events` (спринт 6) |
 | 1.1 | 2026-04-23 | Ссылки на зафиксированные схемы в `openapi.yaml` v0.4.0 |
 | 1.0 | 2026-04-23 | Первоначальная фиксация требований по обсуждению (identity-only, без refresh провайдера, гибрид UX, слияние в Web UI, единый backend) |

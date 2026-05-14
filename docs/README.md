@@ -1,5 +1,6 @@
 ## Documentation
 
+- **[RELEASE_BUILD_AND_DEPLOY.md](./RELEASE_BUILD_AND_DEPLOY.md)** — сборка release-артефактов (Docker, Web UI, Admin Web UI, CLI, расширение) и чеклист выката.
 - **[TECHNICAL_SPECIFICATION.md](./TECHNICAL_SPECIFICATION.md)** — техническое задание (канон). Сегментация по времени, **fast/final**, **`finalize`**, `meta` / `kind`: **§17**.
 - **[ROADMAP.md](./ROADMAP.md)** — дорожная карта и пометки по реализации.
 - **[OPENAPI.md](./OPENAPI.md)** — как проверять [`../openapi.yaml`](../openapi.yaml).

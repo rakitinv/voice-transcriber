@@ -2069,7 +2069,11 @@ components:
       additionalProperties: false
       properties:
         default_provider: { type: string }
+        realtime_provider: { type: string, nullable: true }
+        final_provider: { type: string, nullable: true }
         recognition_model: { type: string, nullable: true }
+        realtime_recognition_model: { type: string, nullable: true }
+        final_recognition_model: { type: string, nullable: true }
         providers:
           type: array
           items:

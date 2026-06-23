@@ -9,12 +9,13 @@
 
 | Компонент | Состояние |
 |-----------|-----------|
-| `configs/asr.yaml` | `default_provider`, **`recognition_model`** (текущая модель для активного движка), `providers.*`; опционально **`VT_ASR_MODEL`** |
+| `configs/asr.yaml` | `default_provider`, **`realtime_provider`**, **`final_provider`**, `recognition_model`, tier models, `providers.*`; env `VT_ASR_REALTIME_PROVIDER`, `VT_ASR_FINAL_PROVIDER`, … |
 | `plugins/loader.py` | `_load_asr_provider` → **`build_asr_provider`** из `app/asr/factory.py` |
 | `app/asr/factory.py` | `build_asr_provider`, для `default_provider` подмешивает `recognition_model` в `config["model"]` |
 | `app/asr/*.py` | Провайдеры возвращают **wired** placeholder (текст с `[ASR wired]`, имя модели) до подключения реального inference |
 | `workers/tasks/asr.py` | `plugin_registry.get_asr_provider()` → если есть — `transcribe`; иначе классический `STUB_TRANSCRIPT` |
-| `core/asr_chunk.py` | Аналогично для chunk |
+| `core/asr_chunk.py` | `plugin_registry.get_asr_provider(tier="realtime")` |
+| `workers/tasks/asr.py` | `plugin_registry.get_asr_provider(tier="final")` |
 
 Дальнейшие шаги: заменить placeholder в `app/asr/whisper.py` (и др.) на реальный вызов библиотеки; образ worker — зависимости GPU/CPU по мере необходимости.
 
@@ -83,6 +84,12 @@
 - [x] Единая фабрика: `build_asr_provider` в `app/asr/factory.py`, loader без дублирующей логики.
 
 Реальный текст распознавания (не placeholder) — следующий этап: inference в `app/asr/*.py`.
+
+### GigaAM (`gigaam`)
+
+- Реализация: `app/asr/gigaam.py`, `app/asr/gigaam_engine.py`.
+- Конфиг: `configs/asr.yaml` → `providers.gigaam`; документация: [`GIGAAM_ASR.md`](./GIGAAM_ASR.md).
+- Optional Poetry group `gigaam`; GPU-образ `docker/Dockerfile.worker.gpu` (`poetry install --with gigaam`).
 
 ---
 

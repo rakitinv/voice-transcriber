@@ -322,7 +322,7 @@ def run_diarization(
             # Turn-level re-ASR when enabled (server YAML + user override) and ASR+ffmpeg exist;
             # otherwise keep ASR segment text and assign speakers by overlap with pyannote turns.
             diarized_segments = []
-            asr = plugin_registry.get_asr_provider()
+            asr = plugin_registry.get_asr_provider(tier="final")
             # For re-transcription inside diarization we prefer the user's explicit language setting
             # (it is usually more reliable than short-turn autodetection).
             lang_hint = user_settings_lang or _language_hint_from_transcript_json(transcript)

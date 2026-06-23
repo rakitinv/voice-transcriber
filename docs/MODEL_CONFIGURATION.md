@@ -7,7 +7,7 @@
 
 | Назначение | Файл конфигурации | Где используется |
 |-----------|--------------------|------------------|
-| **ASR** (whisper / faster-whisper / vosk…) | [`configs/asr.yaml`](../configs/asr.yaml) | batch: `workers/tasks/asr.py`, realtime: `core/asr_chunk.py`, factory: `app/asr/factory.py` |
+| **ASR** (whisper / faster-whisper / vosk / **gigaam**) | [`configs/asr.yaml`](../configs/asr.yaml) | batch: `workers/tasks/asr.py`, realtime: `core/asr_chunk.py`, factory: `app/asr/factory.py` |
 | **Diarization** (pyannote и др.) | [`configs/diarization.yaml`](../configs/diarization.yaml) | `workers/tasks/diarization.py` |
 | **Embeddings** (семантический поиск) | [`configs/embeddings.yaml`](../configs/embeddings.yaml) | `workers/tasks/embeddings.py`, `app/api/search.py`, `core/embedding_client.py` |
 | **LLM** (summary и др.) | [`configs/llm.yaml`](../configs/llm.yaml) | `workers/tasks/llm.py`, `plugins/` |
@@ -22,8 +22,39 @@
   - `providers.*`: включение/пути/реализация (например Vosk `model_path`)
 
 ### Переопределения окружением (удобно для Docker)
-- `VT_ASR_DEFAULT_PROVIDER`
-- `VT_ASR_MODEL`
+- `VT_ASR_DEFAULT_PROVIDER` — fallback, если tier-поля не заданы
+- **`VT_ASR_REALTIME_PROVIDER`** / **`VT_ASR_FINAL_PROVIDER`** — отдельные движки для realtime и final
+- `VT_ASR_MODEL` — модель для `default_provider` (legacy)
+- **`VT_ASR_REALTIME_MODEL`** / **`VT_ASR_FINAL_MODEL`** — модели для соответствующего tier
+- `VT_GIGAAM_LONGFORM` — longform для провайдера `gigaam`
+
+### Realtime vs Final (разные провайдеры)
+
+В `configs/asr.yaml`:
+
+```yaml
+default_provider: whisper          # fallback
+realtime_provider: whisper         # WebSocket / chunk на API
+final_provider: gigaam             # Celery batch ASR (нужен worker-final-gpu + poetry --with gigaam)
+final_recognition_model: v3_e2e_rnnt
+```
+
+Если `realtime_provider` / `final_provider` не заданы, оба tier используют `default_provider`.
+
+Типичный Docker-пример:
+
+| Сервис | Env |
+|--------|-----|
+| `api` | (из `asr.yaml`: `realtime_provider=whisper`) |
+| `worker-final-gpu` | (из `asr.yaml`: `final_provider=gigaam`) |
+
+### GigaAM (русский ASR)
+
+См. подробно: [`GIGAAM_ASR.md`](./GIGAAM_ASR.md).
+
+- Провайдер `gigaam` в `configs/asr.yaml` по умолчанию **выключен** (`enabled: false`).
+- Рекомендуемая модель: `v3_e2e_rnnt`; на GPU-воркере: `VT_ASR_DEFAULT_PROVIDER=gigaam`, `VT_ASR_DEVICE=cuda`.
+- Зависимости: Poetry group `gigaam` (`poetry install --with gigaam`); образ `worker-final-gpu`.
 
 См. также: [`ASR_PROVIDER_IMPLEMENTATION.md`](./ASR_PROVIDER_IMPLEMENTATION.md), [`docker/README.md`](../docker/README.md).
 

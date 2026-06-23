@@ -101,6 +101,9 @@ class ASRProviderConfig:
     model: str | None = None
     impl: str | None = None  # dotted path to implementation, optional
     model_path: str | None = None  # каталог модели (напр. Vosk), см. configs/asr.yaml
+    longform_enabled: bool | None = None  # GigaAM: transcribe_longform для длинных файлов
+    hf_token_env: str | None = None  # GigaAM longform / HF cache
+    model_cache_dir: str | None = None
 
 
 @dataclass
@@ -137,12 +140,21 @@ class DiarizationConfig:
 @dataclass
 class ASRConfig:
     default_provider: str
-    """Имя провайдера из `providers` (whisper / faster_whisper / vosk / …)."""
+    """Fallback ASR engine when tier-specific provider is not set."""
 
-    recognition_model: str | None
-    """Текущая используемая модель для `default_provider` (перекрывает model у записи провайдера)."""
+    realtime_provider: str | None = None
+    """Realtime WebSocket/chunk ASR; falls back to ``default_provider``."""
 
-    providers: Dict[str, ASRProviderConfig]
+    final_provider: str | None = None
+    """Batch/final Celery ASR; falls back to ``default_provider``."""
+
+    recognition_model: str | None = None
+    """Model for ``default_provider`` (legacy); use tier fields for explicit overrides."""
+
+    realtime_recognition_model: str | None = None
+    final_recognition_model: str | None = None
+
+    providers: Dict[str, ASRProviderConfig] = field(default_factory=dict)
 
 
 @dataclass
@@ -282,11 +294,20 @@ def _apply_env_overrides(server_data: Dict[str, Any]) -> None:
 def _asr_provider_config_from_dict(cfg: Dict[str, Any]) -> ASRProviderConfig:
     if not isinstance(cfg, dict):
         cfg = {}
+
+    def _bool_or_none(v: Any) -> bool | None:
+        if v is None:
+            return None
+        return bool(v)
+
     return ASRProviderConfig(
         enabled=bool(cfg.get("enabled", False)),
         model=cfg.get("model"),
         impl=cfg.get("impl"),
         model_path=cfg.get("model_path"),
+        longform_enabled=_bool_or_none(cfg.get("longform_enabled")),
+        hf_token_env=cfg.get("hf_token_env"),
+        model_cache_dir=cfg.get("model_cache_dir"),
     )
 
 
@@ -317,22 +338,47 @@ def _diarization_provider_config_from_dict(cfg: Dict[str, Any]) -> DiarizationPr
 
 def _apply_diarization_env_overrides(diarization_data: Dict[str, Any]) -> None:
     v = os.environ.get("VT_DIARIZATION_TURN_LEVEL_RETRANSCRIPTION")
-    if v is None or not str(v).strip():
-        return
-    diarization_data["turn_level_retranscription"] = str(v).strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
+    if v is not None and str(v).strip():
+        diarization_data["turn_level_retranscription"] = str(v).strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+    dev = (os.environ.get("VT_DIARIZATION_DEVICE") or "").strip().lower()
+    if dev in ("auto", "cpu", "cuda"):
+        providers = diarization_data.setdefault("providers", {})
+        if isinstance(providers, dict):
+            pyannote = providers.setdefault("pyannote", {})
+            if isinstance(pyannote, dict):
+                pyannote["device"] = dev
 
 
 def _apply_asr_env_overrides(asr_data: Dict[str, Any]) -> None:
     """Переопределения для configs/asr.yaml (модель и т.д.)."""
     if os.environ.get("VT_ASR_DEFAULT_PROVIDER"):
         asr_data["default_provider"] = os.environ["VT_ASR_DEFAULT_PROVIDER"].strip()
+    if os.environ.get("VT_ASR_REALTIME_PROVIDER"):
+        asr_data["realtime_provider"] = os.environ["VT_ASR_REALTIME_PROVIDER"].strip()
+    if os.environ.get("VT_ASR_FINAL_PROVIDER"):
+        asr_data["final_provider"] = os.environ["VT_ASR_FINAL_PROVIDER"].strip()
     if os.environ.get("VT_ASR_MODEL"):
         asr_data["recognition_model"] = os.environ["VT_ASR_MODEL"].strip()
+    if os.environ.get("VT_ASR_REALTIME_MODEL"):
+        asr_data["realtime_recognition_model"] = os.environ["VT_ASR_REALTIME_MODEL"].strip()
+    if os.environ.get("VT_ASR_FINAL_MODEL"):
+        asr_data["final_recognition_model"] = os.environ["VT_ASR_FINAL_MODEL"].strip()
+    lf = os.environ.get("VT_GIGAAM_LONGFORM")
+    if lf is not None and str(lf).strip():
+        providers = asr_data.setdefault("providers", {})
+        gigaam = providers.setdefault("gigaam", {})
+        if isinstance(gigaam, dict):
+            gigaam["longform_enabled"] = str(lf).strip().lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            )
 
 
 def _embeddings_config_from_yaml(embeddings_data: Dict[str, Any]) -> EmbeddingsConfig:
@@ -372,10 +418,19 @@ def _apply_llm_env_overrides(llm_data: Dict[str, Any]) -> None:
     mc = os.environ.get("VT_LLM_SESSION_SUMMARY_MAX_INPUT_CHARS", "").strip()
     if mc.isdigit():
         llm_data["session_summary_max_input_chars"] = int(mc)
+    default = (os.environ.get("VT_LLM_DEFAULT_PROVIDER") or "").strip()
+    if default:
+        llm_data["default_provider"] = default
     # Docker/workers: localhost in llm.yaml points at the container itself; set e.g.
     # VT_OLLAMA_BASE_URL=http://host.docker.internal:11434 (Desktop) or http://ollama:11434.
     ollama_url = os.environ.get("VT_OLLAMA_BASE_URL", "").strip()
     ollama_model = os.environ.get("VT_OLLAMA_MODEL", "").strip()
+    vllm_url = os.environ.get("VT_VLLM_BASE_URL", "").strip()
+    vllm_model = os.environ.get("VT_VLLM_MODEL", "").strip()
+    vllm_key = os.environ.get("VT_VLLM_API_KEY", "").strip()
+    openai_url = os.environ.get("VT_OPENAI_BASE_URL", "").strip()
+    openai_model = os.environ.get("VT_OPENAI_MODEL", "").strip()
+    openai_key = os.environ.get("VT_OPENAI_API_KEY", "").strip()
     providers = llm_data.get("providers")
     if isinstance(providers, dict):
         om = providers.get("ollama")
@@ -384,6 +439,26 @@ def _apply_llm_env_overrides(llm_data: Dict[str, Any]) -> None:
                 om["base_url"] = ollama_url
             if ollama_model:
                 om["model"] = ollama_model
+        vm = providers.get("vllm")
+        if isinstance(vm, dict):
+            if default == "vllm":
+                vm["enabled"] = True
+            if vllm_url:
+                vm["base_url"] = vllm_url
+            if vllm_model:
+                vm["model"] = vllm_model
+            if vllm_key:
+                vm["api_key"] = vllm_key
+        oai = providers.get("openai")
+        if isinstance(oai, dict):
+            if default == "openai":
+                oai["enabled"] = True
+            if openai_url:
+                oai["base_url"] = openai_url
+            if openai_model:
+                oai["model"] = openai_model
+            if openai_key:
+                oai["api_key"] = openai_key
 
 
 def _apply_embeddings_env_overrides(embeddings_data: Dict[str, Any]) -> None:
@@ -519,9 +594,21 @@ def load_app_config() -> ServerConfig:
     rec_model = asr_data.get("recognition_model")
     if rec_model is not None and not isinstance(rec_model, str):
         rec_model = str(rec_model)
+
+    def _opt_str(key: str) -> str | None:
+        raw = asr_data.get(key)
+        if raw is None:
+            return None
+        s = str(raw).strip()
+        return s or None
+
     asr_cfg = ASRConfig(
         default_provider=str(asr_data.get("default_provider", "") or "").strip(),
+        realtime_provider=_opt_str("realtime_provider"),
+        final_provider=_opt_str("final_provider"),
         recognition_model=(rec_model.strip() if rec_model else None),
+        realtime_recognition_model=_opt_str("realtime_recognition_model"),
+        final_recognition_model=_opt_str("final_recognition_model"),
         providers=asr_providers,
     )
 

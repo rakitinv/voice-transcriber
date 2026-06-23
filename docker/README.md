@@ -13,7 +13,7 @@ Run the full speech transcription stack locally with Docker Compose.
 | **worker** | —         | Celery: **`VT_MAIN_WORKER_QUEUES`** по умолчанию **asr_fast**, **asr**, **llm**, **cleanup** |
 | **worker-llm** | **`scale_llm`** | Только очередь **llm** (§7.6 summary, embeddings); поднимайте вместе с **`VT_MAIN_WORKER_QUEUES=asr_fast,asr,cleanup`** у **worker**, чтобы не было двух потребителей **llm** |
 | **worker-final** | —   | Celery (очередь **asr_final** — тяжелый/финальный ASR по ТЗ §17, CPU) |
-| **worker-final-gpu** | — | Celery (очередь **asr_final**, **GPU**; образ **`Dockerfile.worker.gpu`**, CUDA-библиотеки через PyPI wheels + `LD_LIBRARY_PATH`; профиль compose **`gpu`**) |
+| **worker-final-gpu** | **`gpu`** | Celery (**`asr_fast`**, **`asr_final`**, GPU; образ **`Dockerfile.worker.gpu`**, CUDA через CTranslate2) |
 | **diarization-worker** | — | Diarization Celery worker: **CPU**-сборка PyTorch (`build.args.DIARIZATION_TORCH=cpu`), очередь **diarization** (compose profile `diarization`) |
 | **diarization-worker-gpu** | — | Diarization Celery worker: **CUDA**-сборка PyTorch (`DIARIZATION_TORCH=cuda`), профиль compose **`gpu`** |
 | **migrate** | —        | Однократно: `alembic upgrade head` |
@@ -69,7 +69,7 @@ docker compose up --build
 
 Затем выполните миграции (`docker compose run --rm migrate` или полный `up`). Повторный `upgrade` с тем же email не создаст дубликат (`ON CONFLICT DO NOTHING`).
 
-Проверка без UI: `GET http://localhost:8003/health` (без авторизации); `GET http://localhost:8003/admin/api/v1/me` с заголовком `Authorization: Bearer <access JWT>` выданным основным **api** после входа. Цепочка **admin-webui** (порт **3003**) + **admin-api** (**8003**): откройте консоль — **«Google» / «Яндекс»** ведут на `GET /api/auth/...` продуктового API; после провайдера браузер возвращается на админку с токенами в hash. На сервисе **api** задайте **`VT_ADMIN_WEBUI_ORIGIN`** (или **`VT_ADMIN_WEBUI_ORIGINS`**, через запятую) в том же origin, что и у собранной админки (`VITE_ADMIN_WEBUI_SELF_URL` при сборке образа). **Консоль Google/Яндекс:** redirect/callback остаётся только URL API (`…/api/auth/*/callback`), отдельно регистрировать хост админки не нужно. Ручной ввод JWT по-прежнему возможен. В БД после миграций: в т.ч. **`pipeline_events`**, колонки **`transcripts.asr_chunk_*`** (прогресс нарезки ASR), ранее — `admin_memberships`, `admin_audit_events`, `auth_signin_events` (см. `server/alembic/versions/`).
+Проверка без UI: `GET http://localhost:8003/health` (без авторизации); `GET http://localhost:8003/admin/api/v1/me` с заголовком `Authorization: Bearer <access JWT>` выданным основным **api** после входа. Цепочка **admin-webui** (порт **3003**) + **admin-api** (**8003**): откройте консоль — **«Google» / «Яндекс»** ведут на `GET /api/auth/...` продуктового API; после провайдера браузер возвращается на админку с токенами в hash. На сервисе **api** задайте **`VT_ADMIN_WEBUI_ORIGIN`** (или **`VT_ADMIN_WEBUI_ORIGINS`**, через запятую) в том же origin, что и у собранной админки (`VITE_ADMIN_WEBUI_SELF_URL` при сборке образа). Переменная должна попасть **в контейнер api**: compose читает **`deploy/docker/.env`** (на prod — **копия** `/etc/voice-transcriber/voice-transcriber.env`, обновляет `install-or-update.sh`; symlink на `/etc/…` не используйте — на части хостов api падает при старте). Дополнительно: **`docker compose --env-file /etc/voice-transcriber/voice-transcriber.env up -d`**. **`docker compose restart api` не перечитывает env** — нужен **`up -d --force-recreate api`**. Для S3: **внутри compose** — `VT_S3_ENDPOINT=http://minio:9000`; **MinIO на хосте** — `http://host.docker.internal:<порт>` (не `localhost` из контейнера). См. `voice-transcriber.env.example` § S3. **Консоль Google/Яндекс:** redirect/callback остаётся только URL API (`…/api/auth/*/callback`), отдельно регистрировать хост админки не нужно. Ручной ввод JWT по-прежнему возможен. В БД после миграций: в т.ч. **`pipeline_events`**, колонки **`transcripts.asr_chunk_*`** (прогресс нарезки ASR), ранее — `admin_memberships`, `admin_audit_events`, `auth_signin_events` (см. `server/alembic/versions/`).
 
 Переменные окружения сервиса **`admin-api`** (опционально, см. также `configs/server.yaml` → `admin_console`):
 
@@ -134,13 +134,17 @@ The API and worker use environment variables set in `docker-compose.yml`. You ca
 - `VT_DATABASE_URL` – PostgreSQL connection string  
 - `VT_REDIS_URL` – Redis connection string  
 - `VT_CELERY_VISIBILITY_TIMEOUT` – секунды видимости сообщения в Redis для Celery (по умолчанию в compose **14400** = 4 ч); должно быть **больше** максимальной длительности задачи `transcribe_file` при `task_acks_late`, иначе возможна повторная доставка задачи (ТЗ §17)
-- **`VT_MAIN_WORKER_QUEUES`** — список очередей основного **`worker`** (по умолчанию `asr_fast,asr,llm,cleanup`). Если поднимаете **`worker-llm`** (`--profile scale_llm`), задайте например `VT_MAIN_WORKER_QUEUES=asr_fast,asr,cleanup`, чтобы тяжёлый **llm** обрабатывался только выделенным воркером.
+- **`VT_MAIN_WORKER_QUEUES`** — список очередей основного **`worker`** (по умолчанию `asr_fast,asr,llm,cleanup`). Если поднимаете **`worker-llm`** (`--profile scale_llm`), задайте например `VT_MAIN_WORKER_QUEUES=asr_fast,asr,cleanup`, чтобы тяжёлый **llm** обрабатывался только выделенным воркером. **При profile `gpu`** уберите **`asr_fast`** из этого списка (слайсы §17 обрабатывает **`worker-final-gpu`**), например `VT_MAIN_WORKER_QUEUES=asr,cleanup` вместе с **`scale_llm`**.
 - **`VT_LLM_WORKER_CONCURRENCY`** — concurrency только для **`worker-llm`** (по умолчанию **2**).
-- `VT_S3_ENDPOINT`, `VT_S3_BUCKET`, `VT_S3_ACCESS_KEY`, `VT_S3_SECRET_KEY` – MinIO/S3  
+- **`VT_ASR_FINAL_WORKER_QUEUES`** — очереди **`worker-final-gpu`** (по умолчанию **`asr_fast,asr_final`**).
+- **`VT_ASR_FINAL_CONCURRENCY`** — параллельность **`worker-final-gpu`** (по умолчанию **2**, для параллельной нарезки §17).
+- **`VT_ASR_SLICE_QUEUE`** — очередь Celery для **`transcribe_slice`** (по умолчанию **`asr_fast`**; менять только при нестандартной топологии воркеров).
+- `VT_S3_ENDPOINT`, `VT_S3_BUCKET`, `VT_S3_ACCESS_KEY`, `VT_S3_SECRET_KEY` – MinIO/S3 (в `docker-compose.yml` через `${VT_S3_*:-…}`; задайте в `docker/.env` или `/etc/voice-transcriber/voice-transcriber.env` при `compose --env-file`)  
 - `VT_ENVIRONMENT` – e.g. `production`
 - **`VT_JWT_SECRET`** (опционально) — единый секрет подписи JWT для API и воркера. Если не задан, используется **Google OAuth `client_secret`** из `configs/server.yaml` (см. `server/core/security.py`). Задавайте **одинаковое** значение для **api** и **worker**, иначе токены и шифрование объектов в S3 разъедутся.
-- **`VT_ASR_DEFAULT_PROVIDER`** — переопределяет `configs/asr.yaml` → `default_provider` (напр. для **`worker-final-gpu`** по умолчанию **`faster_whisper`**, чтобы CUDA шёл через **CTranslate2**, а не через OpenAI Whisper без нужных `.so` в образе).
-- **`VT_ASR_PARALLEL_CHUNKS`**, **`VT_ASR_CHUNK_SECONDS`**, **`VT_ASR_CHUNK_OVERLAP_SECONDS`** — параллельная нарезка длинных файлов (очередь **`asr_final`**, см. ТЗ §17).
+- **`VT_ASR_REALTIME_PROVIDER`** / **`VT_ASR_FINAL_PROVIDER`** — отдельные движки realtime и final (см. [`MODEL_CONFIGURATION.md`](../docs/MODEL_CONFIGURATION.md)).
+- **`VT_GIGAAM_LONGFORM`** — `1`/`0`: longform-режим GigaAM для файлов длиннее ~25 с (нужен `VT_HF_TOKEN` на GPU-воркере).
+- **`VT_ASR_PARALLEL_CHUNKS`**, **`VT_ASR_CHUNK_SECONDS`**, **`VT_ASR_CHUNK_OVERLAP_SECONDS`** — параллельная нарезка длинных файлов: слайсы → **`asr_fast`** (или **`VT_ASR_SLICE_QUEUE`**), merge → **`asr_final`** (ТЗ §17).
 - **Semantic search (C2):** см. `configs/embeddings.yaml` (монтируется в контейнер как `/app/configs/embeddings.yaml`).
   - `VT_EMBEDDINGS_ENABLED=1` — включить индексацию и `GET /api/search?mode=semantic`
   - `VT_EMBEDDINGS_PROVIDER=ollama|openai`, `VT_EMBEDDINGS_MODEL=...`
@@ -154,6 +158,12 @@ The `configs/` directory is mounted read-only into the API and worker. Ensure `c
 ```env
 # Опционально; без этого JWT берётся из смонтированного server.yaml
 VT_JWT_SECRET=your-long-random-secret
+
+# Внешний S3 вместо встроенного MinIO (см. docs/RELEASE_BUILD_AND_DEPLOY.md §3.4)
+# VT_S3_ENDPOINT=https://storage.yandexcloud.net
+# VT_S3_BUCKET=my-voice-transcriber
+# VT_S3_ACCESS_KEY=...
+# VT_S3_SECRET_KEY=...
 ```
 
 ## First-time setup
@@ -186,15 +196,83 @@ docker compose run --rm migrate
 
 ## Building the Web UI for a different API URL
 
-To point the frontend at another API (e.g. in production), pass the URL at build time:
+To point the frontend at another API (e.g. in production), pass the URL at build time via **`scripts/release/release.env`** (`VITE_API_BASE_URL` and/or `VT_PUBLIC_API_URL`) and run `scripts/release/build-docker.*`, or export those variables before `docker compose build webui`. Compose подставляет `${VITE_API_BASE_URL:-${VT_PUBLIC_API_URL:-http://localhost:8002}}` в `docker-compose.yml`.
 
-```yaml
-# In docker-compose.yml, under webui build args:
-args:
-  VITE_API_BASE_URL: https://api.example.com
+Then rebuild the webui image: `docker compose build webui` (на сборочной машине с полным репозиторием, не из дистрибутива `deploy/`).
+
+**Только OAuth / URL фронта (без PyPI):** образы `webui` и `admin-webui` не качают Python-зависимости. Из корня репозитория с заполненным `scripts/release/release.env`:
+
+```powershell
+# Имена с дефисом — в кавычках (иначе PowerShell видит -webui как отдельный параметр):
+powershell -File scripts/release/build-docker.ps1 -Services "admin-webui"
+powershell -File scripts/release/build-docker.ps1 -Services webui,"admin-webui"
+powershell -File scripts/release/build-docker.ps1 -Services webui admin-webui
 ```
 
-Then rebuild the webui image: `docker compose build webui`.
+Затем упакуйте tar только для этих образов (см. `package-release.ps1`) или положите их в `docker-images/` вручную через `docker save`.
+
+### Admin Web UI за префиксом `/admin/` (prod)
+
+При сборке задайте **`VITE_ADMIN_WEBUI_BASE_PATH=/admin/`** (см. `scripts/release/release.env`). Контейнер **admin-webui**, как и **webui**, отдаёт статику через **`serve`**.
+
+На **внешнем** nginx (обязательно при префиксе `/admin/`):
+
+- **`location /admin/`** → `proxy_pass http://127.0.0.1:3003/;` — **слэш в конце** `proxy_pass`, чтобы `/admin/assets/foo.js` уходил в контейнер как `/assets/foo.js`;
+- **`location /admin/api/`** → порт **8003** (admin-api), **выше** блока `/admin/`, иначе API попадёт в SPA;
+- не используйте `try_files` с fallback на `index.html` для путей `…/assets/*.js`.
+
+Пример: [nginx/voicer-reverse-proxy.example.conf](./nginx/voicer-reverse-proxy.example.conf). Симптом ошибки: ответ на `…/admin/assets/*.js` — `text/html`, белый экран.
+
+### Ошибка `files.pythonhosted.org failed` при сборке api/worker
+
+Сборка **api** / **worker** / **migrate** обращается к PyPI. Типичные причины: обрыв сети, DNS, блокировка, корпоративный прокси.
+
+1. Повторите `docker compose build` (кэш pip/poetry ускорит повтор).
+2. Проверьте интернет/VPN/DNS в Docker Desktop (Settings → Resources → Network).
+3. Зеркало PyPI перед сборкой (PowerShell): `$env:PIP_INDEX_URL = "https://pypi.org/simple"` или зеркало вашей организации; в `release.env`: `PIP_INDEX_URL=...`.
+4. Для правки OAuth на prod **не обязательно** пересобирать api/worker, если их образы уже есть на машине — достаточно п. «Только OAuth» выше.
+
+В `Dockerfile.api` / `Dockerfile.worker` используется **`poetry.lock`** (без `rm -f poetry.lock`) и увеличенные таймауты pip/poetry.
+
+## Final ASR: CPU vs GPU (`worker-final` / `worker-final-gpu`)
+
+| Сервис | Профиль | Очереди Celery | Устройство ASR |
+|--------|---------|----------------|----------------|
+| **`worker-final`** | — (по умолчанию с `up`) | **`asr_final`** | CPU (`VT_ASR_DEVICE=cpu`) |
+| **`worker-final-gpu`** | **`gpu`** | **`asr_fast`**, **`asr_final`** | CUDA (`VT_ASR_DEVICE=cuda`, faster-whisper) |
+
+**Важно:** оба final-воркера слушают **`asr_final`**. При profile **`gpu`** **остановите** **`worker-final`**, иначе Celery раздаст final ASR на CPU:
+
+```bash
+docker compose stop worker-final
+docker compose --profile gpu up -d worker-final-gpu
+```
+
+Сборка только GPU-образов (без пересборки `migrate` из `depends_on`):
+
+```bash
+docker compose --profile gpu build --no-deps worker-final-gpu diarization-worker-gpu
+```
+
+Параллельная нарезка длинных upload (§17) ставит **`transcribe_slice`** в **`asr_fast`**. На GPU-деплое **`worker-final-gpu`** должен быть **единственным** потребителем **`asr_fast`** для тяжёлого ASR — задайте у основного **`worker`**:
+
+```env
+VT_MAIN_WORKER_QUEUES=asr,cleanup
+```
+
+(если поднят **`worker-llm`** / profile **`scale_llm`**; иначе добавьте **`llm`** в список).
+
+`install-or-update.sh` при **`VT_COMPOSE_PROFILES=…,gpu`** автоматически останавливает **`worker-final`** и **`diarization-worker`** и предупреждает, если **`asr_fast`** остался у основного worker.
+
+Пример prod с GPU:
+
+```env
+VT_COMPOSE_PROFILES=gpu,diarization,scale_llm
+VT_MAIN_WORKER_QUEUES=asr,cleanup
+VT_ASR_DEVICE=cuda
+VT_ASR_COMPUTE_TYPE=float16
+VT_DIARIZATION_DEVICE=cuda
+```
 
 ## Diarization: CPU vs CUDA images
 

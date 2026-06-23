@@ -5,6 +5,7 @@ Concrete implementations will wrap:
 - Whisper
 - Faster-Whisper
 - Vosk
+- GigaAM
 """
 
 from __future__ import annotations

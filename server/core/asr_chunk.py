@@ -23,7 +23,7 @@ def _transcribe_chunk_blob(
     vad_preferences: dict | None = None,
 ) -> str:
     try:
-        provider = plugin_registry.get_asr_provider()
+        provider = plugin_registry.get_asr_provider(tier="realtime")
         if not provider:
             return STUB_CHUNK_TEXT
         return provider.transcribe_chunk(

@@ -24,7 +24,11 @@ class _AsrProviderOut:
 @dataclass(frozen=True)
 class _AsrOut:
     default_provider: str
+    realtime_provider: str | None
+    final_provider: str | None
     recognition_model: str | None
+    realtime_recognition_model: str | None
+    final_recognition_model: str | None
     providers: tuple[_AsrProviderOut, ...]
 
 
@@ -136,7 +140,11 @@ def build_pipeline_runtime_snapshot() -> PipelineRuntimeSnapshot:
         environment=str(cfg.environment or "").strip() or "unknown",
         asr=_AsrOut(
             default_provider=cfg.asr.default_provider,
+            realtime_provider=cfg.asr.realtime_provider,
+            final_provider=cfg.asr.final_provider,
             recognition_model=cfg.asr.recognition_model,
+            realtime_recognition_model=cfg.asr.realtime_recognition_model,
+            final_recognition_model=cfg.asr.final_recognition_model,
             providers=tuple(asr_providers),
         ),
         diarization=_DiarOut(
@@ -207,7 +215,11 @@ def snapshot_to_jsonable(snapshot: PipelineRuntimeSnapshot) -> dict[str, Any]:
         "environment": s.environment,
         "asr": {
             "default_provider": s.asr.default_provider,
+            "realtime_provider": s.asr.realtime_provider,
+            "final_provider": s.asr.final_provider,
             "recognition_model": s.asr.recognition_model,
+            "realtime_recognition_model": s.asr.realtime_recognition_model,
+            "final_recognition_model": s.asr.final_recognition_model,
             "providers": [_asr_provider(p) for p in s.asr.providers],
         },
         "diarization": {

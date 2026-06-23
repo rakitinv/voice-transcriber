@@ -455,7 +455,11 @@ class PipelineAsrBlock(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     default_provider: str
+    realtime_provider: str | None = None
+    final_provider: str | None = None
     recognition_model: str | None = None
+    realtime_recognition_model: str | None = None
+    final_recognition_model: str | None = None
     providers: list[PipelineAsrProviderItem] = Field(default_factory=list)
 
 

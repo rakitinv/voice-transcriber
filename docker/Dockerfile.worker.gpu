@@ -6,8 +6,14 @@
 #
 FROM python:3.11-slim
 
+ARG PIP_INDEX_URL=https://pypi.org/simple
+
 ENV PIP_BREAK_SYSTEM_PACKAGES=1 \
     PYTHONPATH="/app/server:$PYTHONPATH" \
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_DEFAULT_TIMEOUT=600 \
+    PIP_RETRIES=10 \
+    POETRY_HTTP_TIMEOUT=600 \
     LD_LIBRARY_PATH="/usr/local/lib/python3.11/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.11/site-packages/nvidia/cuda_runtime/lib:/usr/local/lib/python3.11/site-packages/nvidia/cuda_nvrtc/lib:/usr/local/lib/python3.11/site-packages/nvidia/cudnn/lib:${LD_LIBRARY_PATH}"
 
 WORKDIR /app
@@ -26,26 +32,42 @@ COPY configs/ /app/configs/
 
 WORKDIR /app/server
 
-RUN --mount=type=cache,target=/root/.cache/pip \
+RUN --mount=type=cache,target=/root/.cache/pip,id=vt-worker-gpu-pip \
     pip install --upgrade pip setuptools wheel
 
 # CUDA runtime libs needed by CTranslate2 GPU backend (libcublas, libcudart, cudnn).
 # These wheels bundle the corresponding .so files.
-RUN --mount=type=cache,target=/root/.cache/pip \
+RUN --mount=type=cache,target=/root/.cache/pip,id=vt-worker-gpu-pip \
     pip install \
       nvidia-cublas-cu12 \
       nvidia-cuda-runtime-cu12 \
       nvidia-cudnn-cu12
 
 # Install Poetry and dependencies
-RUN --mount=type=cache,target=/root/.cache/pip \
+RUN --mount=type=cache,target=/root/.cache/pip,id=vt-worker-gpu-pip \
     pip install poetry poetry-plugin-export
 
 RUN poetry config virtualenvs.create false
 
-RUN --mount=type=cache,target=/root/.cache/pip \
-    rm -f poetry.lock && \
-    poetry install --only main --no-interaction --no-ansi --no-root
+RUN --mount=type=cache,target=/root/.cache/pip,id=vt-worker-gpu-pip \
+    --mount=type=cache,target=/root/.cache/pypoetry,id=vt-worker-gpu-pypoetry \
+    poetry install --only main --with gigaam --no-interaction --no-ansi --no-root
 
-CMD ["python", "-m", "celery", "-A", "workers.celery_app.celery_app", "worker", "--loglevel=info", "--queues=asr_final"]
+# GigaAM uses PyTorch directly (not CTranslate2); upgrade to CUDA wheels on GPU image.
+RUN --mount=type=cache,target=/root/.cache/pip,id=vt-worker-gpu-pip \
+    pip install --upgrade \
+      torch==2.4.1+cu124 \
+      torchaudio==2.4.1+cu124 \
+      --index-url https://download.pytorch.org/whl/cu124
+
+# Longform extra (pyannote segmentation inside GigaAM); HF token required at runtime.
+RUN --mount=type=cache,target=/root/.cache/pip,id=vt-worker-gpu-pip \
+    pip install "gigaam[longform] @ git+https://github.com/salute-developers/GigaAM.git" || true
+
+RUN python -c "import gigaam; print('gigaam import ok')"
+
+ENV HF_HOME=/models \
+    HUGGINGFACE_HUB_CACHE=/models
+
+CMD ["python", "-m", "celery", "-A", "workers.celery_app.celery_app", "worker", "--loglevel=info", "--queues=asr_fast,asr_final", "--concurrency=2"]
 

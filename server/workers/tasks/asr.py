@@ -13,7 +13,7 @@ from uuid import UUID
 from app.models import Conversation, Transcript, User
 from app.services.pipeline_event_write import record_pipeline_event
 
-from ..celery_app import celery_app
+from ..celery_app import asr_slice_queue, celery_app
 from celery import chain, chord  # type: ignore
 from sqlalchemy import func, update
 from core.asr_chunk import transcribe_audio_chunk_bytes
@@ -195,7 +195,7 @@ def transcribe_slice(
             tmp_path.write_bytes(audio_data)
 
         wav_clip = _slice_media_to_wav_16k_mono(tmp_path, float(start_s), float(end_s))
-        provider = plugin_registry.get_asr_provider()
+        provider = plugin_registry.get_asr_provider(tier="final")
         if provider is None:
             return {"ok": False, "segments": [], "error": "no_asr_provider"}
         segs = provider.transcribe(str(wav_clip), language=language, vad_preferences=vad_prefs)
@@ -380,8 +380,10 @@ def transcribe_file(
             next_rev = int(last_rev or 0) + 1
 
             meta_base: dict = {
-                "asr_provider": getattr(plugin_registry.get_asr_provider(), "name", None)
-                if plugin_registry.get_asr_provider()
+                "asr_provider": getattr(
+                    plugin_registry.get_asr_provider(tier="final"), "name", None
+                )
+                if plugin_registry.get_asr_provider(tier="final")
                 else None,
                 "language_hint": language,
                 "audio_object_ext": ext,
@@ -422,7 +424,7 @@ def transcribe_file(
             tmp_path = Path(tmp_file.name)
             tmp_path.write_bytes(audio_data)
 
-        provider = plugin_registry.get_asr_provider()
+        provider = plugin_registry.get_asr_provider(tier="final")
         if provider:
             # Normalize input container → wav to avoid fragmented WebM edge-cases
             # (browser MediaRecorder chunks concatenation may produce non-seekable/cued WebM).
@@ -493,7 +495,7 @@ def transcribe_file(
                                 start_s=float(s0),
                                 end_s=float(s1),
                                 trim_before_s=(float(t0) if idx > 0 else None),
-                            ).set(queue="asr_fast")
+                            ).set(queue=asr_slice_queue())
                             bump_sig = record_asr_chunk_done.si(transcript_id=trow_id).set(
                                 queue="asr_final"
                             )

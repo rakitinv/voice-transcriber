@@ -23,10 +23,12 @@ services:
     networks:
       - voice-transcriber
 
-  # Unit-тесты в изолированном контейнере (образ **dev**: main + pytest). Не поднимается с `up`.
-  # Запуск: из каталога docker/: `docker compose run --rm tests`
-  # Только админ-тесты: `docker compose run --rm tests python -m pytest tests/unit/test_admin_api_health.py tests/unit/test_admin_sprint2.py tests/unit/test_admin_sprint3.py tests/unit/test_admin_sprint4.py -q`
+  # Unit-тесты в изолированном контейнере (образ **dev**: main + pytest).
+  # Запуск: docker compose --profile test run --rm tests
+  # Не включается в prod `up` (профиль test).
   tests:
+    profiles:
+      - test
     build:
       context: ..
       dockerfile: docker/Dockerfile.api
@@ -34,14 +36,14 @@ services:
     environment:
       PYTHONPATH: /app/server
       VT_ENVIRONMENT: production
-      VT_WEBUI_ORIGIN: http://localhost:3002
+      VT_WEBUI_ORIGIN: ${VT_WEBUI_ORIGIN:-http://localhost:3002}
       VT_PUBLIC_API_URL: ${VT_PUBLIC_API_URL:-http://localhost:8002}
       VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
       VT_REDIS_URL: redis://redis:6379/0
-      VT_S3_ENDPOINT: http://minio:9000
-      VT_S3_BUCKET: voice-transcriber
-      VT_S3_ACCESS_KEY: minioadmin
-      VT_S3_SECRET_KEY: minioadmin
+      VT_S3_ENDPOINT: ${VT_S3_ENDPOINT:-http://minio:9000}
+      VT_S3_BUCKET: ${VT_S3_BUCKET:-voice-transcriber}
+      VT_S3_ACCESS_KEY: ${VT_S3_ACCESS_KEY:-minioadmin}
+      VT_S3_SECRET_KEY: ${VT_S3_SECRET_KEY:-minioadmin}
       VT_JWT_SECRET: ${VT_JWT_SECRET:-}
     volumes:
       - ../configs:/app/configs:ro
@@ -64,15 +66,18 @@ services:
     ports:
       - "8002:8000"
       - "5680:5678" # Порт для отладчика
+    # MinIO/S3 на хосте (не в compose): VT_S3_ENDPOINT=http://host.docker.internal:9000
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Prod: install-or-update.sh копирует /etc/voice-transcriber/voice-transcriber.env → deploy/docker/.env
+    env_file:
+      - path: .env
+        required: false
     environment:
       PYTHONPATH: /app/server
       VT_ENVIRONMENT: production
-      VT_WEBUI_ORIGIN: http://localhost:3002
-      # Браузерные OAuth redirect_uri для Web UI должны совпадать с консолью провайдера (хост:порт снаружи Docker).
-      VT_PUBLIC_API_URL: ${VT_PUBLIC_API_URL:-http://localhost:8002}
-      # Ops admin-webui OAuth: return URL allowlist (must match VITE_ADMIN_WEBUI_SELF_URL in admin-webui build).
-      VT_ADMIN_WEBUI_ORIGIN: ${VT_ADMIN_WEBUI_ORIGIN:-http://localhost:3003}
-      VT_ADMIN_WEBUI_ORIGINS: ${VT_ADMIN_WEBUI_ORIGINS:-}
+      # Публичные URL (VT_WEBUI_ORIGIN, VT_PUBLIC_API_URL, VT_ADMIN_WEBUI_ORIGIN/S) — только через
+      # env_file (.env); не дублировать в environment: иначе дефолт localhost перезапишет /etc/… при up.
       # Аудит входов / lockout (см. docs/AUTH_AND_IDENTITY.md §8); значения из docker/.env при подстановке compose.
       VT_AUTH_AUDIT_SALT: ${VT_AUTH_AUDIT_SALT:-}
       VT_AUTH_SIGNIN_EVENTS_RETENTION_DAYS: ${VT_AUTH_SIGNIN_EVENTS_RETENTION_DAYS:-}
@@ -84,10 +89,10 @@ services:
       VT_CORS_ORIGINS: ${VT_CORS_ORIGINS:-}
       VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
       VT_REDIS_URL: redis://redis:6379/0
-      VT_S3_ENDPOINT: http://minio:9000
-      VT_S3_BUCKET: voice-transcriber
-      VT_S3_ACCESS_KEY: minioadmin
-      VT_S3_SECRET_KEY: minioadmin
+      VT_S3_ENDPOINT: ${VT_S3_ENDPOINT:-http://minio:9000}
+      VT_S3_BUCKET: ${VT_S3_BUCKET:-voice-transcriber}
+      VT_S3_ACCESS_KEY: ${VT_S3_ACCESS_KEY:-minioadmin}
+      VT_S3_SECRET_KEY: ${VT_S3_SECRET_KEY:-minioadmin}
       # Частичные транскрипты между несколькими репликами API (см. server/app/api/ws_hub.py).
       VT_TRANSCRIPT_REDIS: "1"
       # WebSocket JWT (C7.5, docs/WEBSOCKET.md): при VT_ENVIRONMENT=production query access_token запрещён; канон — Sec-WebSocket-Protocol bearer.<JWT>.
@@ -96,7 +101,9 @@ services:
       VT_WS_REQUIRE_SUBPROTOCOL: ${VT_WS_REQUIRE_SUBPROTOCOL:-}
       # Опционально: единый секрет JWT для API/воркера/CLI (см. server/core/security.py). Иначе — из configs/server.yaml (Google client_secret).
       VT_JWT_SECRET: ${VT_JWT_SECRET:-}
-      # ASR quality tuning (faster-whisper)
+      # ASR quality tuning (faster-whisper) — realtime tier on API
+      VT_ASR_REALTIME_PROVIDER: ${VT_ASR_REALTIME_PROVIDER:-}
+      VT_ASR_REALTIME_MODEL: ${VT_ASR_REALTIME_MODEL:-}
       VT_ASR_MODEL: ${VT_ASR_MODEL:-medium}
       VT_ASR_DEVICE: ${VT_ASR_DEVICE:-cpu}
       VT_ASR_COMPUTE_TYPE: ${VT_ASR_COMPUTE_TYPE:-int8}
@@ -143,16 +150,21 @@ services:
       dockerfile: docker/Dockerfile.api
     ports:
       - "8003:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    env_file:
+      - path: .env
+        required: false
     environment:
       PYTHONPATH: /app/server
       VT_ENVIRONMENT: production
       VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
       VT_REDIS_URL: redis://redis:6379/0
       # Те же параметры объекта, что у `api` (общий configs + overrides; см. VT_S3_* у сервиса api).
-      VT_S3_ENDPOINT: http://minio:9000
-      VT_S3_BUCKET: voice-transcriber
-      VT_S3_ACCESS_KEY: minioadmin
-      VT_S3_SECRET_KEY: minioadmin
+      VT_S3_ENDPOINT: ${VT_S3_ENDPOINT:-http://minio:9000}
+      VT_S3_BUCKET: ${VT_S3_BUCKET:-voice-transcriber}
+      VT_S3_ACCESS_KEY: ${VT_S3_ACCESS_KEY:-minioadmin}
+      VT_S3_SECRET_KEY: ${VT_S3_SECRET_KEY:-minioadmin}
       VT_JWT_SECRET: ${VT_JWT_SECRET:-}
       # Проверка «жив ли продуктовый API» изнутри compose (см. GET /admin/api/v1/infrastructure).
       VT_PUBLIC_API_URL: http://api:8000
@@ -206,10 +218,12 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.admin-webui
       args:
-        # Браузер на хосте обращается к Admin API по проброшенному порту 8003.
-        VITE_ADMIN_API_BASE_URL: http://localhost:8003
-        VITE_PUBLIC_API_BASE_URL: ${VT_PUBLIC_API_URL:-http://localhost:8002}
-        VITE_ADMIN_WEBUI_SELF_URL: ${VT_ADMIN_WEBUI_ORIGIN:-http://localhost:3003}
+        # Публичные URL задаются в scripts/release/release.env (сборка) или docker/.env (локально).
+        VITE_ADMIN_API_BASE_URL: ${VITE_ADMIN_API_BASE_URL:-http://localhost:8003}
+        VITE_PUBLIC_API_BASE_URL: ${VITE_PUBLIC_API_BASE_URL:-${VT_PUBLIC_API_URL:-http://localhost:8002}}
+        VITE_ADMIN_WEBUI_SELF_URL: ${VITE_ADMIN_WEBUI_SELF_URL:-${VT_ADMIN_WEBUI_ORIGIN:-http://localhost:3003}}
+        # Prod за reverse-proxy на /admin/: VITE_ADMIN_WEBUI_BASE_PATH=/admin/
+        VITE_ADMIN_WEBUI_BASE_PATH: ${VITE_ADMIN_WEBUI_BASE_PATH:-/}
     ports:
       - "3003:3000"
     depends_on:
@@ -234,10 +248,10 @@ services:
       VT_ENVIRONMENT: production
       VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
       VT_REDIS_URL: redis://redis:6379/0
-      VT_S3_ENDPOINT: http://minio:9000
-      VT_S3_BUCKET: voice-transcriber
-      VT_S3_ACCESS_KEY: minioadmin
-      VT_S3_SECRET_KEY: minioadmin
+      VT_S3_ENDPOINT: ${VT_S3_ENDPOINT:-http://minio:9000}
+      VT_S3_BUCKET: ${VT_S3_BUCKET:-voice-transcriber}
+      VT_S3_ACCESS_KEY: ${VT_S3_ACCESS_KEY:-minioadmin}
+      VT_S3_SECRET_KEY: ${VT_S3_SECRET_KEY:-minioadmin}
       VT_JWT_SECRET: ${VT_JWT_SECRET:-}
       # Celery Redis broker: seconds; must exceed longest transcribe (ТЗ §17). Default 4h.
       VT_CELERY_VISIBILITY_TIMEOUT: ${VT_CELERY_VISIBILITY_TIMEOUT:-14400}
@@ -257,6 +271,10 @@ services:
       # передать пустое значение и worker остаётся на localhost из llm.yaml → Errno 111.
       VT_OLLAMA_BASE_URL: "${VT_OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
       VT_OLLAMA_MODEL: "${VT_OLLAMA_MODEL:-}"
+      VT_LLM_DEFAULT_PROVIDER: ${VT_LLM_DEFAULT_PROVIDER:-}
+      VT_VLLM_BASE_URL: ${VT_VLLM_BASE_URL:-}
+      VT_VLLM_MODEL: ${VT_VLLM_MODEL:-}
+      VT_VLLM_API_KEY: ${VT_VLLM_API_KEY:-}
     volumes:
       - ../configs:/app/configs:ro
       - ../server/logs:/app/server/logs
@@ -291,10 +309,10 @@ services:
       VT_ENVIRONMENT: production
       VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
       VT_REDIS_URL: redis://redis:6379/0
-      VT_S3_ENDPOINT: http://minio:9000
-      VT_S3_BUCKET: voice-transcriber
-      VT_S3_ACCESS_KEY: minioadmin
-      VT_S3_SECRET_KEY: minioadmin
+      VT_S3_ENDPOINT: ${VT_S3_ENDPOINT:-http://minio:9000}
+      VT_S3_BUCKET: ${VT_S3_BUCKET:-voice-transcriber}
+      VT_S3_ACCESS_KEY: ${VT_S3_ACCESS_KEY:-minioadmin}
+      VT_S3_SECRET_KEY: ${VT_S3_SECRET_KEY:-minioadmin}
       VT_JWT_SECRET: ${VT_JWT_SECRET:-}
       VT_CELERY_VISIBILITY_TIMEOUT: ${VT_CELERY_VISIBILITY_TIMEOUT:-14400}
       VT_ASR_MODEL: ${VT_ASR_MODEL:-medium}
@@ -302,6 +320,10 @@ services:
       VT_ASR_COMPUTE_TYPE: ${VT_ASR_COMPUTE_TYPE:-int8}
       VT_OLLAMA_BASE_URL: "${VT_OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
       VT_OLLAMA_MODEL: "${VT_OLLAMA_MODEL:-}"
+      VT_LLM_DEFAULT_PROVIDER: ${VT_LLM_DEFAULT_PROVIDER:-}
+      VT_VLLM_BASE_URL: ${VT_VLLM_BASE_URL:-}
+      VT_VLLM_MODEL: ${VT_VLLM_MODEL:-}
+      VT_VLLM_API_KEY: ${VT_VLLM_API_KEY:-}
     volumes:
       - ../configs:/app/configs:ro
       - ../server/logs:/app/server/logs
@@ -318,7 +340,8 @@ services:
     networks:
       - voice-transcriber
 
-  # Final ASR worker: выполняет тяжелые задачи (upload, retranscribe, finalize->final).
+  # Final ASR worker (CPU): очередь asr_final. При профиле gpu останавливайте этот сервис —
+  # иначе он конкурирует с worker-final-gpu за ту же очередь (см. docker/README.md).
   worker-final:
     build:
       context: ..
@@ -328,10 +351,10 @@ services:
       VT_ENVIRONMENT: production
       VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
       VT_REDIS_URL: redis://redis:6379/0
-      VT_S3_ENDPOINT: http://minio:9000
-      VT_S3_BUCKET: voice-transcriber
-      VT_S3_ACCESS_KEY: minioadmin
-      VT_S3_SECRET_KEY: minioadmin
+      VT_S3_ENDPOINT: ${VT_S3_ENDPOINT:-http://minio:9000}
+      VT_S3_BUCKET: ${VT_S3_BUCKET:-voice-transcriber}
+      VT_S3_ACCESS_KEY: ${VT_S3_ACCESS_KEY:-minioadmin}
+      VT_S3_SECRET_KEY: ${VT_S3_SECRET_KEY:-minioadmin}
       VT_JWT_SECRET: ${VT_JWT_SECRET:-}
       # Celery Redis broker: seconds; must exceed longest transcribe (ТЗ §17). Default 4h.
       VT_CELERY_VISIBILITY_TIMEOUT: ${VT_CELERY_VISIBILITY_TIMEOUT:-14400}
@@ -364,6 +387,8 @@ services:
       - voice-transcriber
 
   # GPU variant for final ASR. Requires NVIDIA Container Toolkit (WSL2/Linux).
+  # Слушает asr_fast (слайсы §17) и asr_final; остановите worker-final и уберите asr_fast
+  # из VT_MAIN_WORKER_QUEUES у основного worker (см. docker/README.md).
   # Start with: docker compose --profile gpu up -d worker-final-gpu
   worker-final-gpu:
     profiles: ["gpu"]
@@ -375,17 +400,20 @@ services:
       VT_ENVIRONMENT: production
       VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
       VT_REDIS_URL: redis://redis:6379/0
-      VT_S3_ENDPOINT: http://minio:9000
-      VT_S3_BUCKET: voice-transcriber
-      VT_S3_ACCESS_KEY: minioadmin
-      VT_S3_SECRET_KEY: minioadmin
+      VT_S3_ENDPOINT: ${VT_S3_ENDPOINT:-http://minio:9000}
+      VT_S3_BUCKET: ${VT_S3_BUCKET:-voice-transcriber}
+      VT_S3_ACCESS_KEY: ${VT_S3_ACCESS_KEY:-minioadmin}
+      VT_S3_SECRET_KEY: ${VT_S3_SECRET_KEY:-minioadmin}
       VT_JWT_SECRET: ${VT_JWT_SECRET:-}
       VT_CELERY_VISIBILITY_TIMEOUT: ${VT_CELERY_VISIBILITY_TIMEOUT:-14400}
-      # ASR on GPU (faster-whisper / CTranslate2)
-      VT_ASR_DEFAULT_PROVIDER: ${VT_ASR_DEFAULT_PROVIDER:-faster_whisper}
-      VT_ASR_DEVICE: ${VT_DIARIZATION_ASR_DEVICE:-cuda}
-      VT_ASR_COMPUTE_TYPE: ${VT_DIARIZATION_ASR_COMPUTE_TYPE:-float16}
+      # Final ASR: defaults from configs/asr.yaml (final_provider=gigaam); override via env if needed
+      VT_ASR_FINAL_PROVIDER: ${VT_ASR_FINAL_PROVIDER:-}
+      VT_ASR_FINAL_MODEL: ${VT_ASR_FINAL_MODEL:-}
+      VT_ASR_DEVICE: ${VT_ASR_DEVICE:-${VT_DIARIZATION_ASR_DEVICE:-cuda}}
+      VT_ASR_COMPUTE_TYPE: ${VT_ASR_COMPUTE_TYPE:-${VT_DIARIZATION_ASR_COMPUTE_TYPE:-float16}}
       VT_ASR_MODEL: ${VT_ASR_MODEL:-medium}
+      VT_GIGAAM_LONGFORM: ${VT_GIGAAM_LONGFORM:-1}
+      VT_HF_TOKEN: ${VT_HF_TOKEN:-}
       VT_ASR_BEAM_SIZE: ${VT_ASR_BEAM_SIZE:-10}
       VT_ASR_VAD_FILTER: ${VT_ASR_VAD_FILTER:-1}
       VT_ASR_VAD_MIN_SILENCE_MS: ${VT_ASR_VAD_MIN_SILENCE_MS:-400}
@@ -407,6 +435,7 @@ services:
     volumes:
       - ../configs:/app/configs:ro
       - ../server/logs:/app/server/logs
+      - gigaam-models:/models
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -416,7 +445,7 @@ services:
         condition: service_healthy
       minio:
         condition: service_started
-    command: python -m celery -A workers.celery_app.celery_app worker --loglevel=info --queues=asr_final --concurrency=${VT_ASR_FINAL_CONCURRENCY:-1}
+    command: python -m celery -A workers.celery_app.celery_app worker --loglevel=info --queues=${VT_ASR_FINAL_WORKER_QUEUES:-asr_fast,asr_final} --concurrency=${VT_ASR_FINAL_CONCURRENCY:-2}
     networks:
       - voice-transcriber
 
@@ -430,16 +459,19 @@ services:
       dockerfile: docker/Dockerfile.diarization
       args:
         DIARIZATION_TORCH: cpu
+    env_file:
+      - path: .env
+        required: false
     environment:
       PYTHONPATH: /app/server
       VT_CELERY_ENABLE_DIARIZATION: "1"
       VT_ENVIRONMENT: production
       VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
       VT_REDIS_URL: redis://redis:6379/0
-      VT_S3_ENDPOINT: http://minio:9000
-      VT_S3_BUCKET: voice-transcriber
-      VT_S3_ACCESS_KEY: minioadmin
-      VT_S3_SECRET_KEY: minioadmin
+      VT_S3_ENDPOINT: ${VT_S3_ENDPOINT:-http://minio:9000}
+      VT_S3_BUCKET: ${VT_S3_BUCKET:-voice-transcriber}
+      VT_S3_ACCESS_KEY: ${VT_S3_ACCESS_KEY:-minioadmin}
+      VT_S3_SECRET_KEY: ${VT_S3_SECRET_KEY:-minioadmin}
       VT_JWT_SECRET: ${VT_JWT_SECRET:-}
       VT_CELERY_VISIBILITY_TIMEOUT: ${VT_CELERY_VISIBILITY_TIMEOUT:-14400}
       # HuggingFace token for pyannote model downloads (optional in offline mode)
@@ -499,16 +531,19 @@ services:
       dockerfile: docker/Dockerfile.diarization
       args:
         DIARIZATION_TORCH: cuda
+    env_file:
+      - path: .env
+        required: false
     environment:
       PYTHONPATH: /app/server
       VT_CELERY_ENABLE_DIARIZATION: "1"
       VT_ENVIRONMENT: production
       VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
       VT_REDIS_URL: redis://redis:6379/0
-      VT_S3_ENDPOINT: http://minio:9000
-      VT_S3_BUCKET: voice-transcriber
-      VT_S3_ACCESS_KEY: minioadmin
-      VT_S3_SECRET_KEY: minioadmin
+      VT_S3_ENDPOINT: ${VT_S3_ENDPOINT:-http://minio:9000}
+      VT_S3_BUCKET: ${VT_S3_BUCKET:-voice-transcriber}
+      VT_S3_ACCESS_KEY: ${VT_S3_ACCESS_KEY:-minioadmin}
+      VT_S3_SECRET_KEY: ${VT_S3_SECRET_KEY:-minioadmin}
       VT_JWT_SECRET: ${VT_JWT_SECRET:-}
       VT_CELERY_VISIBILITY_TIMEOUT: ${VT_CELERY_VISIBILITY_TIMEOUT:-14400}
       VT_HF_TOKEN: ${VT_HF_TOKEN:-}
@@ -555,7 +590,8 @@ services:
       context: ..
       dockerfile: docker/Dockerfile.webui
       args:
-        VITE_API_BASE_URL: http://localhost:8002
+        # release.env: VITE_API_BASE_URL и/или VT_PUBLIC_API_URL (см. scripts/release/build-docker.*)
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-${VT_PUBLIC_API_URL:-http://localhost:8002}}
     ports:
       - "3002:3000"
     depends_on:
@@ -616,6 +652,7 @@ volumes:
   redis-data:
   minio-data:
   diarization-models:
+  gigaam-models:
 
 networks:
   voice-transcriber:

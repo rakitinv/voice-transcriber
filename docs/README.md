@@ -9,6 +9,7 @@
 - **[BROWSER_EXTENSION_UI.md](./BROWSER_EXTENSION_UI.md)** — соглашения по UI расширения (Side Panel, popup, контекстное меню, persist состояния).
 - **[AUTH_AND_IDENTITY.md](./AUTH_AND_IDENTITY.md)** — OAuth, идентичность, сессия сервиса (расширение + Web UI), слияние аккаунтов в Web UI.
 - **[MODEL_CONFIGURATION.md](./MODEL_CONFIGURATION.md)** — где и как настраиваются модели/провайдеры (ASR/diarization/embeddings/LLM) и параметры автопродления.
+- **[VERSIONING.md](./VERSIONING.md)** — SemVer, [`CHANGELOG.md`](../CHANGELOG.md), синхронизация [`VERSION`](../VERSION).
 - **[ASR_PROVIDER_IMPLEMENTATION.md](./ASR_PROVIDER_IMPLEMENTATION.md)** — план подключения реальных ASR-провайдеров (Phase B, B1.5).
 - **[DIARIZATION_ALIGNMENT_VERSIONING.md](./DIARIZATION_ALIGNMENT_VERSIONING.md)** — дизайн diarization/alignment и схема хранения версий транскриптов (active pointer); `turn_level_retranscription`, Web UI override, `POST …/retranscribe`.
 - **[PHASE_A_ACCEPTANCE.md](./PHASE_A_ACCEPTANCE.md)** — ручной чеклист приёмки Phase A (в т.ч. загрузка файла и запись с микрофона).

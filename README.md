@@ -1,5 +1,7 @@
 ## Voice Transcriber
 
+**Версия:** `0.2.0` ([`VERSION`](VERSION), [`CHANGELOG.md`](CHANGELOG.md), [версионирование](docs/VERSIONING.md))
+
 Репозиторий — **сервер**, **Web UI**, **расширение браузера**, **CLI**, конфигурации и **Docker** для локального и продакшен-подобного развёртывания. Подробности по модулям — в `docs/` и README внутри каталогов. Сборка release-артефактов и сценарии развёртывания (в т.ч. внешние Postgres и S3): [docs/RELEASE_BUILD_AND_DEPLOY.md](docs/RELEASE_BUILD_AND_DEPLOY.md); краткие команды — `Makefile` в корне.
 
 ### High-level Architecture

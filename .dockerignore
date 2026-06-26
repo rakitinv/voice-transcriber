@@ -7,6 +7,7 @@
 
 # Local virtualenvs (must never enter Docker build context)
 **/.venv/
+**/.venv*/
 **/venv/
 **/env/
 

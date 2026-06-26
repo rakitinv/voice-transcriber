@@ -11,7 +11,7 @@ cd cli
 pip install -e .
 ```
 
-Требуется **Python 3.10+** и зависимость **httpx** (прописана в `pyproject.toml`).
+Требуется **Python 3.12+** и зависимость **httpx** (прописана в `pyproject.toml`).
 
 ## Аутентификация (JWT или API key)
 

@@ -3,12 +3,15 @@
 Revision ID: c6_api_keys_001
 Revises: phase_c7_refresh_007
 Create Date: 2026-05-01
+
+Идемпотентно: таблица уже может существовать после initial_001 (create_all).
 """
 
 from __future__ import annotations
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy import inspect
 from sqlalchemy.dialects import postgresql
 
 revision = "c6_api_keys_001"
@@ -18,6 +21,9 @@ depends_on = None
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    if inspect(bind).has_table("user_api_keys"):
+        return
     op.create_table(
         "user_api_keys",
         sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
@@ -32,4 +38,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
+    if not inspect(bind).has_table("user_api_keys"):
+        return
     op.drop_table("user_api_keys")

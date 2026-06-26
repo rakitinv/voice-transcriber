@@ -18,23 +18,31 @@ function publicApiBase(): string {
   return "http://localhost:8002";
 }
 
-/** Origin where this SPA is open — must match API allowlist ``VT_ADMIN_WEBUI_ORIGIN(S)``. */
-function adminSelfOrigin(): string {
-  const raw = (import.meta.env.VITE_ADMIN_WEBUI_SELF_URL || "").replace(/\/$/, "");
-  if (raw) return raw;
+/** Landing URL after OAuth (origin + path, e.g. `https://host/admin`). Allowlist on API compares origin only. */
+function adminSelfLandingUrl(): string {
+  const configured = (import.meta.env.VITE_ADMIN_WEBUI_SELF_URL || "").trim();
+  if (configured) return configured.replace(/\/$/, "");
   if (typeof window !== "undefined") {
+    const viteBase = (import.meta.env.BASE_URL || "/").replace(/\/$/, "");
+    if (viteBase && viteBase !== "/") {
+      return `${window.location.protocol}//${window.location.host}${viteBase}`;
+    }
+    const path = window.location.pathname.replace(/\/$/, "") || "";
+    if (path && path !== "/") {
+      return `${window.location.protocol}//${window.location.host}${path}`;
+    }
     return `${window.location.protocol}//${window.location.host}`;
   }
   return "http://localhost:5174";
 }
 
 function oauthGoogleHref(): string {
-  const next = encodeURIComponent(adminSelfOrigin());
+  const next = encodeURIComponent(adminSelfLandingUrl());
   return `${publicApiBase()}/api/auth/google?client=admin&next=${next}`;
 }
 
 function oauthYandexHref(): string {
-  const next = encodeURIComponent(adminSelfOrigin());
+  const next = encodeURIComponent(adminSelfLandingUrl());
   return `${publicApiBase()}/api/auth/yandex?client=admin&next=${next}`;
 }
 
@@ -612,7 +620,7 @@ export function App() {
           </button>
         </div>
         <p style={{ margin: "10px 0 0", fontSize: "0.8rem", color: "#555" }}>
-          OAuth API: <code>{publicApiBase()}</code> · эта страница: <code>{adminSelfOrigin()}</code>
+          OAuth API: <code>{publicApiBase()}</code> · эта страница: <code>{adminSelfLandingUrl()}</code>
         </p>
       </section>
       <p style={{ color: "#444", fontSize: "0.9rem" }}>
@@ -741,7 +749,8 @@ export function App() {
         <section style={{ marginTop: 16 }}>
           <p style={{ fontSize: "0.85rem", color: "#555" }}>
             Автообновление (джиттер, backoff при ошибках, реже в фоновой вкладке браузера). Кнопка —
-            принудительно.
+            принудительно. Поле <code>compatibility_issues</code> — рассинхрон конфига и стека
+            (например GigaAM при VT_DEPLOY_PROFILE=cpu).
           </p>
           <button type="button" onClick={() => setManualTick((x) => x + 1)}>
             Обновить сейчас

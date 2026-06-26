@@ -36,6 +36,53 @@ def summary_language_prompt_label(iso639_1: str) -> str:
     return _SUMMARY_LANG_LABELS.get(code, f"ISO 639-1 language code {code}")
 
 
+def strip_llm_thinking_artifacts(text: str) -> str:
+    """Remove Qwen3 / reasoning-model thinking blocks from visible summary output."""
+    import re
+
+    s = (text or "").strip()
+    if not s:
+        return s
+    block_re = re.compile(
+        r"<\s*(?:think(?:ing)?|redacted_thinking)\s*>.*?</\s*(?:think(?:ing)?|redacted_thinking)\s*>",
+        re.IGNORECASE | re.DOTALL,
+    )
+    heading_re = re.compile(r"^#{1,3}\s+\S", re.MULTILINE)
+    for _ in range(4):
+        prev = s
+        s = block_re.sub("", s).strip()
+        lower = s.lower()
+        if "" in lower:
+            tail = s[lower.index("") + len("") :].lstrip()
+            m = heading_re.search(tail)
+            s = tail[m.start() :].lstrip() if m else tail
+        for open_tag in ("<think>", "<thinking>"):
+            ol = open_tag.lower()
+            if ol in lower and f"</{open_tag[1:]}" not in lower:
+                idx = lower.index(ol)
+                tail = s[idx + len(open_tag) :].lstrip()
+                m = heading_re.search(tail)
+                s = tail[m.start() :].lstrip() if m else ""
+        if s == prev:
+            break
+    return s.strip()
+
+
+def summary_system_prompt(output_language: str | None) -> str:
+    """System message for summarization (language + no chain-of-thought in output)."""
+    code = (output_language or "ru").strip().lower()
+    label = summary_language_prompt_label(code)
+    if code == "ru":
+        return (
+            "Ты помощник, который пишет краткие сводки разговоров в Markdown на русском языке. "
+            "Ответ — только готовая сводка: без рассуждений, без thinking-блоков, без английского текста."
+        )
+    return (
+        f"You write concise Markdown conversation summaries entirely in {label}. "
+        "Output only the final summary — no reasoning, thinking blocks, or chain-of-thought."
+    )
+
+
 class LLMProvider(ABC):
     """Abstract base class for LLM providers."""
 
@@ -69,16 +116,26 @@ class LLMProvider(ABC):
         text = (markdown_bundle or "").strip()
         if not text:
             return "_Empty transcript._"
-        lang = summary_language_prompt_label(output_language or "en")
-        wrapped = (
-            "Below are chronological transcript segments from one recording session "
-            "(possibly split across multiple conversation IDs due to autoprolong). "
-            f"Produce a concise Markdown summary entirely in {lang}: main topics, "
-            "decisions, action items, and notable speakers when evident. "
-            "Do not switch languages.\n\n"
-            "---\n\n"
-            f"{text}"
-        )
+        code = (output_language or "ru").strip().lower()
+        if code == "ru":
+            wrapped = (
+                "Ниже — хронологические фрагменты транскрипта одной сессии записи "
+                "(возможны несколько conversation ID из-за автопродления). "
+                "Составь краткую Markdown-сводку целиком на русском языке: основные темы, "
+                "решения, задачи и спикеры, если видны. Не переключай язык. "
+                "Только сводка, без рассуждений.\n\n---\n\n"
+                f"{text}"
+            )
+        else:
+            lang = summary_language_prompt_label(code)
+            wrapped = (
+                "Below are chronological transcript segments from one recording session "
+                "(possibly split across multiple conversation IDs due to autoprolong). "
+                f"Produce a concise Markdown summary entirely in {lang}: main topics, "
+                "decisions, action items, and notable speakers when evident. "
+                "Do not switch languages.\n\n---\n\n"
+                f"{text}"
+            )
         return self.summarize(
             {
                 "segments": [

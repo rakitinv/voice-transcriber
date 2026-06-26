@@ -95,6 +95,7 @@
   - [x] **C1.1** Транскрипты: версионирование + `active_transcript_id` (Scheme 2) — хранить историю, отдавать только активную
   - [x] **C1.2** Rerun diarization: endpoint + UI confirm (перезапись = новая версия, promote только на success)
   - [x] **C1.3** Провайдер `pyannote` + отдельный образ воркера: в compose **два** сервиса — `diarization-worker` (CPU wheels, build-arg `DIARIZATION_TORCH=cpu`) и `diarization-worker-gpu` (CUDA wheels, профиль `gpu`, `DIARIZATION_TORCH=cuda`); см. [docker/README.md](../docker/README.md#diarization-cpu-vs-cuda-images)
+- [ ] **C1.4** Идентификация и переименование спикеров (LLM + UI): [SPEAKER_IDENTIFICATION.md](./SPEAKER_IDENTIFICATION.md) — фазы **S1** (ручной rename) → **S2** (LLM suggest) → **S3** (summary/embeddings)
 - [x] **C2** Semantic search (embeddings), если не сделано в A
 - [x] **C3** Автопродление (ТЗ §7): триггеры, хвост в A, связи в БД
 - [x] **C4** Dual capture (микрофон + вкладка) → микширование в один `audio.webm`
@@ -169,6 +170,9 @@
 | 2026-04-30 | Phase C (C7.4) | Привязка провайдеров в Web UI: JWT state `vt_oauth_web_link`; **`GET /api/auth/{provider}/link/start|callback`**; **`GET /api/settings/oauth-identities`**; страница Settings — список + Link Google/Yandex; конфликты → redirect `?oauth_link=error&reason=` |
 | 2026-04-30 | Phase C (C7 + C1) | Родительские пункты **C7**, **C1** отмечены выполненными по коду и конфигам; чеклист ручной приёмки и порядок проверки — [PHASE_C_ACCEPTANCE.md](./PHASE_C_ACCEPTANCE.md); обновлён статус в [DIARIZATION_ALIGNMENT_VERSIONING.md](./DIARIZATION_ALIGNMENT_VERSIONING.md) |
 | 2026-05-01 | ТЗ §17 + документация | Закрыты очереди **`asr_fast`/`asr_final`**, chunking/merge, UX §17.8–§17.9; согласованы **§17.11** ТЗ и [PHASE_B_ACCEPTANCE.md](./PHASE_B_ACCEPTANCE.md) (**finalize**, export **`tier=final`**); backlog — codegen WS, OpenAPI-детализация полного JSON разговора |
+| 2026-06-23 | Зависимости сервера | [DEPENDENCIES_MIGRATION.md](./DEPENDENCIES_MIGRATION.md): **Python 3.12**, pyannote 4 + torch 2.10 + hf_hub 1.x; фазы **4, 5a** (GigaAM в lock, `install-torch.sh`) |
+| 2026-06-24 | Зависимости / деплой | **Unified GPU worker** (`worker-gpu-unified`, profile `gpu-unified`); фазы 0–7 и 5b закрыты |
+| 2026-06-25 | C1.4 / спикеры | План [SPEAKER_IDENTIFICATION.md](./SPEAKER_IDENTIFICATION.md): LLM identify + rename, фазы S1–S3 |
 
 ---
 

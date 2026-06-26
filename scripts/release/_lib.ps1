@@ -102,8 +102,10 @@ function Get-ComposeDefaultBuildServices {
 function Get-ComposeProfileBuildServices {
     param([string]$ProfileName)
     switch ($ProfileName.Trim()) {
-        "gpu" { return @("worker-final-gpu", "diarization-worker-gpu") }
-        "diarization" { return @("diarization-worker") }
+        "gpu" { return @("ml-base-cuda", "worker-final-gpu", "diarization-worker-gpu") }
+        "gpu-unified" { return @("ml-base-cuda", "worker-gpu-unified") }
+        "diarization" { return @("ml-base-cpu", "diarization-worker") }
+        "ml-base" { return @("ml-base-cpu", "ml-base-cuda") }
         "scale_llm" { return @("worker-llm") }
         "test" { return @("tests") }
         default { return @() }
@@ -114,7 +116,9 @@ function Get-ComposeServiceRequiredProfiles {
     param([string]$ServiceName)
     switch ($ServiceName.Trim()) {
         { $_ -in @("worker-final-gpu", "diarization-worker-gpu") } { return @("gpu") }
+        "worker-gpu-unified" { return @("gpu-unified") }
         "diarization-worker" { return @("diarization") }
+        { $_ -in @("ml-base-cpu", "ml-base-cuda") } { return @("ml-base") }
         "worker-llm" { return @("scale_llm") }
         "tests" { return @("test") }
         default { return @() }

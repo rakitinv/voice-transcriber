@@ -1,0 +1,21 @@
+[Unit]
+Description=Voice Transcriber unified GPU worker (ASR final + diarization, Docker Compose profile)
+Wants=network-online.target docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+WorkingDirectory=/opt/voice-transcriber/docker
+
+EnvironmentFile=-/etc/voice-transcriber/voice-transcriber.env
+
+ExecStartPre=/usr/bin/nvidia-smi
+
+# Unified replaces split GPU workers (worker-final-gpu + diarization-worker-gpu).
+ExecStart=/usr/bin/docker compose --profile gpu-unified up -d --no-build worker-gpu-unified
+ExecStop=/usr/bin/docker compose --profile gpu-unified stop worker-gpu-unified
+
+[Install]
+WantedBy=multi-user.target

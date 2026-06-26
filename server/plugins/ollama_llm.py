@@ -8,7 +8,7 @@ import httpx
 
 from core.logging import logger
 
-from .llm_base import LLMProvider, summary_language_prompt_label
+from .llm_base import LLMProvider, strip_llm_thinking_artifacts, summary_language_prompt_label, summary_system_prompt
 
 
 def _ollama_http_detail(response: httpx.Response) -> str:
@@ -46,21 +46,29 @@ class OllamaLLMProvider(LLMProvider):
             lines.append(f"**{sp}**: {body}")
         bundle = "\n\n".join(lines) if lines else "_No transcript._"
 
-        lang_clause = ""
-        if output_language:
+        code = (output_language or "ru").strip().lower()
+        if code == "ru":
+            lang_clause = "Сводка целиком на русском языке. Не используй английский.\n\n"
+            prompt = (
+                f"{summary_system_prompt(output_language)}\n\n"
+                f"{lang_clause}"
+                "Фрагмент разговора:\n\n"
+                f"{bundle}\n\n"
+                "Сводка:"
+            )
+        else:
             lang_clause = (
-                f"Write the summary entirely in {summary_language_prompt_label(output_language)}. "
+                f"Write the summary entirely in {summary_language_prompt_label(code)}. "
                 "Do not switch languages.\n\n"
             )
-        prompt = (
-            "You are an assistant that writes concise Markdown summaries of conversations.\n"
-            "Focus on substance; use bullets where helpful.\n\n"
-            f"{lang_clause}"
-            "Conversation excerpt:\n\n"
-            f"{bundle}\n\n"
-            "Summary:"
-        )
-        return self._generate(prompt)
+            prompt = (
+                f"{summary_system_prompt(output_language)}\n\n"
+                f"{lang_clause}"
+                "Conversation excerpt:\n\n"
+                f"{bundle}\n\n"
+                "Summary:"
+            )
+        return strip_llm_thinking_artifacts(self._generate(prompt))
 
     def _generate(self, prompt: str) -> str:
         raw_base = self.config.get("base_url") or "http://127.0.0.1:11434"

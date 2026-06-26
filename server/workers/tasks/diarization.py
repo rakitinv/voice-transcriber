@@ -12,6 +12,7 @@ from pathlib import Path
 from uuid import UUID
 
 from app.models import Conversation, Transcript, User
+from app.services.pipeline_error_classify import pipeline_failure_detail
 from app.services.pipeline_event_write import record_pipeline_event
 
 from ..celery_app import celery_app
@@ -505,7 +506,7 @@ def run_diarization(
                         conversation_id=conv_uuid,
                         event_type="diarization_failed",
                         transcript_id=last.id,
-                        detail={"reason_code": "diarization_exception"},
+                        detail=pipeline_failure_detail(e, stage="diarization"),
                     )
         except Exception:
             pass

@@ -20,6 +20,9 @@ _ALLOWED_EVENT_TYPES = frozenset(
         "diarization_completed",
         "diarization_failed",
         "embedding_indexed",
+        "summary_started",
+        "summary_completed",
+        "summary_failed",
     }
 )
 
@@ -29,6 +32,8 @@ _ALLOWED_DETAIL_KEYS = frozenset(
         "source_transcript_id",
         "revision",
         "reason_code",
+        "error_hint",
+        "exception_type",
         "chunks_total",
         "chunks_completed",
     }
@@ -56,6 +61,16 @@ def _sanitize_detail(detail: dict[str, Any] | None) -> dict[str, Any] | None:
             s = v.strip()
             if s:
                 out[k] = s[:128]
+            continue
+        if k == "error_hint" and isinstance(v, str):
+            s = v.strip()
+            if s:
+                out[k] = s[:500]
+            continue
+        if k == "exception_type" and isinstance(v, str):
+            s = v.strip()
+            if s:
+                out[k] = s[:64]
     return out or None
 
 

@@ -12,6 +12,7 @@ from uuid import UUID
 
 from app.models import Conversation, Transcript, User
 from app.services.pipeline_event_write import record_pipeline_event
+from app.services.pipeline_error_classify import pipeline_failure_detail
 
 from ..celery_app import asr_slice_queue, celery_app
 from celery import chain, chord  # type: ignore
@@ -141,8 +142,15 @@ def _slice_media_to_wav_16k_mono(src_media: Path, start_s: float, end_s: float) 
 
 
 @celery_app.task(name="workers.tasks.asr.record_asr_chunk_done", bind=True)
-def record_asr_chunk_done(self, *, transcript_id: int) -> None:
-    """Increment completed parallel ASR slice count (atomic; no transcript text)."""
+def record_asr_chunk_done(
+    self, slice_result: dict | None = None, *, transcript_id: int
+) -> dict:
+    """
+    Increment parallel ASR slice counter and pass slice payload to chord merge.
+
+    Chained after transcribe_slice; must return the slice dict (not None) so
+    finalize_parallel_transcript receives segment payloads.
+    """
     tid = int(transcript_id)
     with session_scope() as db:
         db.execute(
@@ -155,6 +163,9 @@ def record_asr_chunk_done(self, *, transcript_id: int) -> None:
                 )
             )
         )
+    if isinstance(slice_result, dict):
+        return slice_result
+    return {"ok": False, "segments": [], "error": "missing_slice_result"}
 
 
 @celery_app.task(name="workers.tasks.asr.transcribe_slice", bind=True)
@@ -224,6 +235,25 @@ def transcribe_slice(
             tmp_path.unlink(missing_ok=True)
 
 
+def _normalize_parallel_chunk_results(results: list | None) -> list[dict]:
+    """Chord may pass None when a chain tail dropped the slice payload."""
+    out: list[dict] = []
+    for r in results or []:
+        if isinstance(r, dict):
+            out.append(r)
+        elif r is None:
+            out.append({"ok": False, "segments": [], "error": "missing_chunk_result"})
+        else:
+            out.append(
+                {
+                    "ok": False,
+                    "segments": [],
+                    "error": f"invalid_chunk_result:{type(r).__name__}",
+                }
+            )
+    return out
+
+
 @celery_app.task(name="workers.tasks.asr.finalize_parallel_transcript", bind=True)
 def finalize_parallel_transcript(
     self,
@@ -238,8 +268,9 @@ def finalize_parallel_transcript(
     """
     conv_uuid = UUID(conversation_id)
     user_uuid = UUID(user_id)
+    chunk_results = _normalize_parallel_chunk_results(results)
 
-    errs = [r.get("error") for r in (results or []) if not r.get("ok")]
+    errs = [r.get("error") for r in chunk_results if not r.get("ok")]
     if errs:
         msg = "; ".join(str(e) for e in errs if e)
         with session_scope() as db:
@@ -262,12 +293,12 @@ def finalize_parallel_transcript(
                     conversation_id=conv_uuid,
                     event_type="asr_failed",
                     transcript_id=int(transcript_id),
-                    detail={"reason_code": "parallel_chunk_errors"},
+                    detail=pipeline_failure_detail(msg, stage="asr"),
                 )
         return {"status": "failed", "error": msg[:1000]}
 
     merged: list[dict] = []
-    for r in results or []:
+    for r in chunk_results:
         segs = r.get("segments") or []
         if isinstance(segs, list):
             for s in segs:
@@ -496,7 +527,7 @@ def transcribe_file(
                                 end_s=float(s1),
                                 trim_before_s=(float(t0) if idx > 0 else None),
                             ).set(queue=asr_slice_queue())
-                            bump_sig = record_asr_chunk_done.si(transcript_id=trow_id).set(
+                            bump_sig = record_asr_chunk_done.s(transcript_id=trow_id).set(
                                 queue="asr_final"
                             )
                             header.append(chain(slice_sig, bump_sig))
@@ -730,6 +761,7 @@ def transcribe_file(
                 )
                 if last is not None:
                     last.status = "failed"
+                    last.meta = {**(last.meta or {}), "error": str(e)[:1000]}
                     last.asr_chunk_total = None
                     last.asr_chunk_completed = None
                     record_pipeline_event(
@@ -737,7 +769,7 @@ def transcribe_file(
                         conversation_id=conv_uuid,
                         event_type="asr_failed",
                         transcript_id=last.id,
-                        detail={"reason_code": "exception"},
+                        detail=pipeline_failure_detail(e, stage="asr"),
                     )
         except Exception:
             pass

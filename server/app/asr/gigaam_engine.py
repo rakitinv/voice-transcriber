@@ -81,21 +81,50 @@ def _warn_non_russian(language: Optional[str]) -> None:
         )
 
 
+def _gigaam_cache_dir(config: Dict[str, Any]) -> Path:
+    cache_dir = (config.get("model_cache_dir") or "").strip()
+    if cache_dir:
+        return Path(cache_dir) / "gigaam"
+    return Path.home() / ".cache" / "gigaam"
+
+
+def _prepare_gigaam_cache(config: Dict[str, Any]) -> Path:
+    """Prefer persistent model_cache_dir; symlink ~/.cache/gigaam when empty."""
+    target = _gigaam_cache_dir(config)
+    target.mkdir(parents=True, exist_ok=True)
+    if not (config.get("model_cache_dir") or "").strip():
+        return target
+    link = Path.home() / ".cache" / "gigaam"
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if link.is_symlink():
+        return target
+    if not link.exists():
+        link.symlink_to(target, target_is_directory=True)
+    return target
+
+
+def _load_gigaam_model_locked(name: str, *, cache_dir: Path) -> Any:
+    """Cross-process lock: parallel Celery workers must not download the ckpt twice."""
+    import fcntl
+
+    import gigaam  # type: ignore
+
+    lock_path = cache_dir / ".load.lock"
+    with open(lock_path, "a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        return gigaam.load_model(name)
+
+
 def get_gigaam_model(config: Dict[str, Any]) -> Any:
     """Load and cache GigaAM model (lazy import)."""
     _apply_cache_env(config)
+    cache_dir = _prepare_gigaam_cache(config)
     name = _model_name(config)
     device = _device()
     key = (name, device)
     with _model_lock:
         if key in _model_cache:
             return _model_cache[key]
-        try:
-            import gigaam  # type: ignore
-        except ImportError as e:
-            raise RuntimeError(
-                "gigaam package is not installed (poetry install --with gigaam)"
-            ) from e
         try:
             import torch  # type: ignore
         except ImportError as e:
@@ -106,7 +135,12 @@ def get_gigaam_model(config: Dict[str, Any]) -> Any:
             device = "cpu"
             key = (name, device)
 
-        model = gigaam.load_model(name)
+        try:
+            model = _load_gigaam_model_locked(name, cache_dir=cache_dir)
+        except ImportError as e:
+            raise RuntimeError(
+                "gigaam package is not installed (GPU worker: poetry install --with gigaam)"
+            ) from e
         if device == "cuda" and hasattr(model, "to"):
             try:
                 model.to("cuda")

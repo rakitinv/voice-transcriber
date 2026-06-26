@@ -1,0 +1,137 @@
+# syntax=docker/dockerfile:1
+#
+# Shared ML runtime and thin child images (phase 5b).
+# Targets: ml-base-cpu, ml-base-cuda, diarization-worker, diarization-worker-gpu, worker-final-gpu, worker-gpu-unified
+#
+#   docker build --target ml-base-cuda -f docker/Dockerfile.ml-base -t voice-transcriber-ml-base-cuda:local .
+#   docker build --target worker-final-gpu -f docker/Dockerfile.ml-base .
+#
+FROM python:3.12-slim AS ml-base-common
+
+ARG PIP_INDEX_URL=https://pypi.org/simple
+ARG TORCH_VERSION=2.10.0
+
+ENV PIP_BREAK_SYSTEM_PACKAGES=1 \
+    PYTHONPATH=/app/server \
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_DEFAULT_TIMEOUT=1800 \
+    PIP_RETRIES=15 \
+    POETRY_HTTP_TIMEOUT=1800 \
+    PIP_RETRY_MAX=8 \
+    PIP_RETRY_PAUSE_SEC=30 \
+    TORCH_VERSION=${TORCH_VERSION}
+
+WORKDIR /app
+
+COPY docker/scripts/install-torch.sh /usr/local/bin/install-torch.sh
+COPY docker/scripts/pip-retry.sh /usr/local/bin/pip-retry.sh
+COPY docker/diarization_strip_torch_cuda.py /tmp/strip_torch_cuda.py
+RUN sed -i 's/\r$//' /usr/local/bin/install-torch.sh /usr/local/bin/pip-retry.sh \
+    && chmod +x /usr/local/bin/install-torch.sh /usr/local/bin/pip-retry.sh
+
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    ffmpeg \
+    git \
+    libgomp1 \
+    libsndfile1 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY server/pyproject.toml server/poetry.lock* /app/server/
+
+WORKDIR /app/server
+
+RUN --mount=type=cache,target=/root/.cache/pip,id=vt-ml-base-pip \
+    pip install --upgrade pip setuptools wheel
+RUN --mount=type=cache,target=/root/.cache/pip,id=vt-ml-base-pip \
+    pip install poetry poetry-plugin-export
+
+RUN poetry config virtualenvs.create false
+
+RUN --mount=type=cache,target=/root/.cache/pip,id=vt-ml-base-pip \
+    --mount=type=cache,target=/root/.cache/pypoetry,id=vt-ml-base-pypoetry \
+    poetry install --with diarization --no-interaction --no-ansi --no-root
+
+RUN --mount=type=cache,target=/root/.cache/pip,id=vt-ml-base-pip \
+    --mount=type=cache,target=/root/.cache/pypoetry,id=vt-ml-base-pypoetry \
+    poetry export --only gigaam --without-hashes -o /tmp/gigaam-req.txt && \
+    python /tmp/strip_torch_cuda.py /tmp/gigaam-req.txt /tmp/gigaam-req-no-torch.txt && \
+    pip-retry.sh install -r /tmp/gigaam-req-no-torch.txt
+
+FROM ml-base-common AS ml-base-cpu
+
+RUN --mount=type=cache,target=/root/.cache/pip,id=vt-ml-base-pip \
+    install-torch.sh cpu
+
+RUN python -c "from pyannote.audio import Pipeline; import gigaam; import torch; print('ml-base-cpu ok', torch.__version__)"
+
+FROM ml-base-common AS ml-base-cuda
+
+ENV LD_LIBRARY_PATH="/usr/local/lib/python3.12/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:/usr/local/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib:/usr/local/lib/python3.12/site-packages/nvidia/cudnn/lib:${LD_LIBRARY_PATH}"
+
+RUN --mount=type=cache,target=/root/.cache/pip,id=vt-ml-base-pip \
+    install-torch.sh cuda
+
+RUN python -c "from pyannote.audio import Pipeline; import gigaam; import torch; print('ml-base-cuda ok', torch.__version__)"
+
+# --- Thin child images (app code; rebuild when server/ changes) ---
+
+FROM ml-base-cpu AS diarization-worker
+
+COPY server/ /app/server/
+COPY configs/ /app/configs/
+
+WORKDIR /app/server
+
+RUN python -c "from pyannote.audio import Pipeline; print('pyannote.audio import ok')"
+
+ENV HF_HOME=/models \
+    HUGGINGFACE_HUB_CACHE=/models \
+    TRANSFORMERS_CACHE=/models
+
+CMD ["python", "-m", "workers.diarization_entrypoint"]
+
+FROM ml-base-cuda AS diarization-worker-gpu
+
+COPY server/ /app/server/
+COPY configs/ /app/configs/
+
+WORKDIR /app/server
+
+RUN python -c "from pyannote.audio import Pipeline; print('pyannote.audio import ok')"
+
+ENV HF_HOME=/models \
+    HUGGINGFACE_HUB_CACHE=/models \
+    TRANSFORMERS_CACHE=/models
+
+CMD ["python", "-m", "workers.diarization_entrypoint"]
+
+FROM ml-base-cuda AS worker-final-gpu
+
+COPY server/ /app/server/
+COPY configs/ /app/configs/
+
+WORKDIR /app/server
+
+RUN python -c "import gigaam; import torch; print('gigaam ok', torch.__version__)"
+
+ENV HF_HOME=/models \
+    HUGGINGFACE_HUB_CACHE=/models
+
+CMD ["python", "-m", "celery", "-A", "workers.celery_app.celery_app", "worker", "--loglevel=info", "--queues=asr_fast,asr_final", "--concurrency=2"]
+
+FROM ml-base-cuda AS worker-gpu-unified
+
+COPY server/ /app/server/
+COPY configs/ /app/configs/
+
+WORKDIR /app/server
+
+RUN python -c "from pyannote.audio import Pipeline; import gigaam; import torch; print('gpu-unified ok', torch.__version__)"
+
+ENV HF_HOME=/models \
+    HUGGINGFACE_HUB_CACHE=/models \
+    TRANSFORMERS_CACHE=/models
+
+CMD ["python", "-m", "workers.gpu_unified_entrypoint"]

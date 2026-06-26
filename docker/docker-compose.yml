@@ -35,6 +35,7 @@ services:
       target: dev
     environment:
       PYTHONPATH: /app/server
+      VT_DEPLOY_PROFILE: ${VT_DEPLOY_PROFILE:-cpu}
       VT_ENVIRONMENT: production
       VT_WEBUI_ORIGIN: ${VT_WEBUI_ORIGIN:-http://localhost:3002}
       VT_PUBLIC_API_URL: ${VT_PUBLIC_API_URL:-http://localhost:8002}
@@ -75,6 +76,7 @@ services:
         required: false
     environment:
       PYTHONPATH: /app/server
+      VT_DEPLOY_PROFILE: ${VT_DEPLOY_PROFILE:-cpu}
       VT_ENVIRONMENT: production
       # Публичные URL (VT_WEBUI_ORIGIN, VT_PUBLIC_API_URL, VT_ADMIN_WEBUI_ORIGIN/S) — только через
       # env_file (.env); не дублировать в environment: иначе дефолт localhost перезапишет /etc/… при up.
@@ -157,6 +159,7 @@ services:
         required: false
     environment:
       PYTHONPATH: /app/server
+      VT_DEPLOY_PROFILE: ${VT_DEPLOY_PROFILE:-cpu}
       VT_ENVIRONMENT: production
       VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
       VT_REDIS_URL: redis://redis:6379/0
@@ -245,6 +248,7 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       PYTHONPATH: /app/server
+      VT_DEPLOY_PROFILE: ${VT_DEPLOY_PROFILE:-cpu}
       VT_ENVIRONMENT: production
       VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
       VT_REDIS_URL: redis://redis:6379/0
@@ -255,6 +259,8 @@ services:
       VT_JWT_SECRET: ${VT_JWT_SECRET:-}
       # Celery Redis broker: seconds; must exceed longest transcribe (ТЗ §17). Default 4h.
       VT_CELERY_VISIBILITY_TIMEOUT: ${VT_CELERY_VISIBILITY_TIMEOUT:-14400}
+      VT_ASR_FINAL_PROVIDER: ${VT_ASR_FINAL_PROVIDER:-}
+      VT_ASR_FINAL_MODEL: ${VT_ASR_FINAL_MODEL:-}
       # ASR quality tuning (must match API for realtime consistency)
       VT_ASR_MODEL: ${VT_ASR_MODEL:-medium}
       VT_ASR_DEVICE: ${VT_ASR_DEVICE:-cpu}
@@ -306,6 +312,7 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       PYTHONPATH: /app/server
+      VT_DEPLOY_PROFILE: ${VT_DEPLOY_PROFILE:-cpu}
       VT_ENVIRONMENT: production
       VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
       VT_REDIS_URL: redis://redis:6379/0
@@ -346,8 +353,12 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile.worker
+    env_file:
+      - path: .env
+        required: false
     environment:
       PYTHONPATH: /app/server
+      VT_DEPLOY_PROFILE: ${VT_DEPLOY_PROFILE:-cpu}
       VT_ENVIRONMENT: production
       VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
       VT_REDIS_URL: redis://redis:6379/0
@@ -358,6 +369,9 @@ services:
       VT_JWT_SECRET: ${VT_JWT_SECRET:-}
       # Celery Redis broker: seconds; must exceed longest transcribe (ТЗ §17). Default 4h.
       VT_CELERY_VISIBILITY_TIMEOUT: ${VT_CELERY_VISIBILITY_TIMEOUT:-14400}
+      # Final ASR provider (override asr.yaml final_provider=gigaam on CPU stack).
+      VT_ASR_FINAL_PROVIDER: ${VT_ASR_FINAL_PROVIDER:-}
+      VT_ASR_FINAL_MODEL: ${VT_ASR_FINAL_MODEL:-}
       # ASR quality tuning for final (default matches baseline).
       VT_ASR_MODEL: ${VT_ASR_MODEL:-medium}
       VT_ASR_DEVICE: ${VT_ASR_DEVICE:-cpu}
@@ -386,6 +400,30 @@ services:
     networks:
       - voice-transcriber
 
+  # Shared ML runtime (Poetry main + diarization + gigaam + torch). Build-only; profile ml-base.
+  # Child images: diarization-worker*, worker-final-gpu, diarization-worker-gpu.
+  ml-base-cpu:
+    profiles: ["ml-base"]
+    image: voice-transcriber-ml-base-cpu:${ML_BASE_TAG:-local}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ml-base
+      target: ml-base-cpu
+      args:
+        TORCH_VERSION: ${TORCH_VERSION:-2.10.0}
+    entrypoint: ["/bin/true"]
+
+  ml-base-cuda:
+    profiles: ["ml-base"]
+    image: voice-transcriber-ml-base-cuda:${ML_BASE_TAG:-local}
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ml-base
+      target: ml-base-cuda
+      args:
+        TORCH_VERSION: ${TORCH_VERSION:-2.10.0}
+    entrypoint: ["/bin/true"]
+
   # GPU variant for final ASR. Requires NVIDIA Container Toolkit (WSL2/Linux).
   # Слушает asr_fast (слайсы §17) и asr_final; остановите worker-final и уберите asr_fast
   # из VT_MAIN_WORKER_QUEUES у основного worker (см. docker/README.md).
@@ -394,9 +432,16 @@ services:
     profiles: ["gpu"]
     build:
       context: ..
-      dockerfile: docker/Dockerfile.worker.gpu
+      dockerfile: docker/Dockerfile.ml-base
+      target: worker-final-gpu
+      args:
+        TORCH_VERSION: ${TORCH_VERSION:-2.10.0}
+    env_file:
+      - path: .env
+        required: false
     environment:
       PYTHONPATH: /app/server
+      VT_DEPLOY_PROFILE: ${VT_DEPLOY_PROFILE:-gpu}
       VT_ENVIRONMENT: production
       VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
       VT_REDIS_URL: redis://redis:6379/0
@@ -456,15 +501,17 @@ services:
     profiles: ["diarization"]
     build:
       context: ..
-      dockerfile: docker/Dockerfile.diarization
+      dockerfile: docker/Dockerfile.ml-base
+      target: diarization-worker
       args:
-        DIARIZATION_TORCH: cpu
+        TORCH_VERSION: ${TORCH_VERSION:-2.10.0}
     env_file:
       - path: .env
         required: false
     environment:
       PYTHONPATH: /app/server
       VT_CELERY_ENABLE_DIARIZATION: "1"
+      VT_DEPLOY_PROFILE: ${VT_DEPLOY_PROFILE:-cpu}
       VT_ENVIRONMENT: production
       VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
       VT_REDIS_URL: redis://redis:6379/0
@@ -528,15 +575,17 @@ services:
     profiles: ["gpu"]
     build:
       context: ..
-      dockerfile: docker/Dockerfile.diarization
+      dockerfile: docker/Dockerfile.ml-base
+      target: diarization-worker-gpu
       args:
-        DIARIZATION_TORCH: cuda
+        TORCH_VERSION: ${TORCH_VERSION:-2.10.0}
     env_file:
       - path: .env
         required: false
     environment:
       PYTHONPATH: /app/server
       VT_CELERY_ENABLE_DIARIZATION: "1"
+      VT_DEPLOY_PROFILE: ${VT_DEPLOY_PROFILE:-gpu}
       VT_ENVIRONMENT: production
       VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
       VT_REDIS_URL: redis://redis:6379/0
@@ -582,6 +631,86 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+    networks:
+      - voice-transcriber
+
+  # Unified GPU ML worker: final ASR + diarization in one Celery process (profile gpu-unified).
+  # Mutually exclusive with split profile gpu (worker-final-gpu + diarization-worker-gpu).
+  # Start: docker compose --profile gpu-unified up -d worker-gpu-unified
+  worker-gpu-unified:
+    profiles: ["gpu-unified"]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ml-base
+      target: worker-gpu-unified
+      args:
+        TORCH_VERSION: ${TORCH_VERSION:-2.10.0}
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      PYTHONPATH: /app/server
+      VT_CELERY_ENABLE_DIARIZATION: "1"
+      VT_DEPLOY_PROFILE: ${VT_DEPLOY_PROFILE:-gpu-unified}
+      VT_ENVIRONMENT: production
+      VT_DATABASE_URL: postgresql+psycopg2://voice:voice@postgres:5432/voice
+      VT_REDIS_URL: redis://redis:6379/0
+      VT_S3_ENDPOINT: ${VT_S3_ENDPOINT:-http://minio:9000}
+      VT_S3_BUCKET: ${VT_S3_BUCKET:-voice-transcriber}
+      VT_S3_ACCESS_KEY: ${VT_S3_ACCESS_KEY:-minioadmin}
+      VT_S3_SECRET_KEY: ${VT_S3_SECRET_KEY:-minioadmin}
+      VT_JWT_SECRET: ${VT_JWT_SECRET:-}
+      VT_CELERY_VISIBILITY_TIMEOUT: ${VT_CELERY_VISIBILITY_TIMEOUT:-14400}
+      VT_HF_TOKEN: ${VT_HF_TOKEN:-}
+      HF_TOKEN: ${VT_HF_TOKEN:-}
+      HUGGINGFACE_HUB_TOKEN: ${VT_HF_TOKEN:-}
+      # Final ASR (GigaAM)
+      VT_ASR_FINAL_PROVIDER: ${VT_ASR_FINAL_PROVIDER:-}
+      VT_ASR_FINAL_MODEL: ${VT_ASR_FINAL_MODEL:-}
+      VT_ASR_DEVICE: ${VT_ASR_DEVICE:-${VT_DIARIZATION_ASR_DEVICE:-cuda}}
+      VT_ASR_COMPUTE_TYPE: ${VT_ASR_COMPUTE_TYPE:-${VT_DIARIZATION_ASR_COMPUTE_TYPE:-float16}}
+      VT_ASR_MODEL: ${VT_ASR_MODEL:-${VT_DIARIZATION_ASR_MODEL:-medium}}
+      VT_GIGAAM_LONGFORM: ${VT_GIGAAM_LONGFORM:-1}
+      VT_ASR_BEAM_SIZE: ${VT_ASR_BEAM_SIZE:-10}
+      VT_ASR_VAD_FILTER: ${VT_ASR_VAD_FILTER:-${VT_DIARIZATION_ASR_VAD_FILTER:-0}}
+      VT_ASR_VAD_MIN_SILENCE_MS: ${VT_ASR_VAD_MIN_SILENCE_MS:-400}
+      VT_ASR_TEMPERATURE: ${VT_ASR_TEMPERATURE:-0.0}
+      VT_ASR_PATIENCE: ${VT_ASR_PATIENCE:-1.0}
+      VT_ASR_CONDITION_ON_PREVIOUS_TEXT: ${VT_ASR_CONDITION_ON_PREVIOUS_TEXT:-0}
+      VT_ASR_PARALLEL_CHUNKS: ${VT_ASR_PARALLEL_CHUNKS:-1}
+      VT_ASR_CHUNK_SECONDS: ${VT_ASR_CHUNK_SECONDS:-600}
+      VT_ASR_CHUNK_OVERLAP_SECONDS: ${VT_ASR_CHUNK_OVERLAP_SECONDS:-1.0}
+      VT_ASR_HOTWORDS: ${VT_DIARIZATION_ASR_HOTWORDS:-уделённое,уделённое время,вам также,всего хорошего,до свидания}
+      VT_ASR_INITIAL_PROMPT: ${VT_DIARIZATION_ASR_INITIAL_PROMPT:-Спасибо за уделённое время. Я желаю вам хорошего дня. Вам также всего хорошего. До свидания.}
+      VT_DIARIZATION_MIN_TURN_SECONDS: ${VT_DIARIZATION_MIN_TURN_SECONDS:-0.3}
+      VT_DIARIZATION_TURN_PAD_BEFORE_SECONDS: ${VT_DIARIZATION_TURN_PAD_BEFORE_SECONDS:-0.8}
+      VT_DIARIZATION_TURN_PAD_AFTER_SECONDS: ${VT_DIARIZATION_TURN_PAD_AFTER_SECONDS:-0.15}
+      VT_DIARIZATION_MERGE_GAP_SECONDS: ${VT_DIARIZATION_MERGE_GAP_SECONDS:-0.35}
+      VT_DIARIZATION_WARMUP: ${VT_DIARIZATION_WARMUP:-1}
+      VT_GPU_UNIFIED_WORKER_QUEUES: ${VT_GPU_UNIFIED_WORKER_QUEUES:-asr_fast,asr_final,diarization}
+      VT_GPU_UNIFIED_CONCURRENCY: ${VT_GPU_UNIFIED_CONCURRENCY:-2}
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ../configs:/app/configs:ro
+      - ../server/logs:/app/server/logs
+      - gpu-ml-models:/models
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_started
     networks:
       - voice-transcriber
 
@@ -653,6 +782,7 @@ volumes:
   minio-data:
   diarization-models:
   gigaam-models:
+  gpu-ml-models:
 
 networks:
   voice-transcriber:

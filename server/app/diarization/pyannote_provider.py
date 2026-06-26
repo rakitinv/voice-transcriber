@@ -10,6 +10,29 @@ from core.logging import logger
 from plugins.diarization_base import DiarizationProvider, DiarizationSegment
 
 
+def _annotation_from_pipeline_output(diar: Any) -> Any:
+    """
+    pyannote.audio 4.x returns DiarizeOutput; speaker segments are on
+    .speaker_diarization (pyannote.core.Annotation). Older versions returned
+    Annotation directly from pipeline(...).
+    """
+    ann = getattr(diar, "speaker_diarization", None)
+    if ann is not None:
+        return ann
+    return diar
+
+
+def _iter_labeled_turns(diar: Any):
+    """Yield (turn, track, speaker) from pipeline output (3.x or 4.x)."""
+    annotation = _annotation_from_pipeline_output(diar)
+    if not hasattr(annotation, "itertracks"):
+        raise RuntimeError(
+            "Unexpected pyannote pipeline output: expected Annotation.itertracks "
+            f"or DiarizeOutput.speaker_diarization, got {type(diar).__name__}"
+        )
+    yield from annotation.itertracks(yield_label=True)
+
+
 def _normalize_audio_to_wav_16k_mono(src_path: str) -> str:
     """
     Convert arbitrary input audio to a diarization-friendly WAV:
@@ -144,13 +167,50 @@ class PyannoteDiarizationProvider(DiarizationProvider):
         if device == "auto":
             device = "cpu"
 
+        if device == "cpu" and torch.cuda.is_available():
+            # In GPU images, from_pretrained may touch CUDA first; free VRAM before load/move.
+            try:
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
+
         wav_path = _normalize_audio_to_wav_16k_mono(audio_path)
         try:
             pipe = Pipeline.from_pretrained(model)
+            if pipe is None:
+                raise RuntimeError(
+                    f"pyannote Pipeline.from_pretrained({model!r}) returned None. "
+                    "Обычно это gated-модель HuggingFace: задайте VT_HF_TOKEN в env воркера, "
+                    "примите условия на https://hf.co/pyannote/speaker-diarization-3.1 "
+                    "(и связанные pyannote/* модели), пересоздайте diarization-worker."
+                )
+            torch_dev = torch.device(device)
             try:
-                pipe.to(torch.device(device))
+                pipe.to(torch_dev)
             except Exception as e:
-                raise RuntimeError(f"Failed to move pyannote pipeline to device={device}") from e
+                if device_cfg == "auto" and device == "cuda":
+                    logger.warning(
+                        "pyannote pipeline failed on CUDA (%s); falling back to CPU", e
+                    )
+                    try:
+                        torch.cuda.empty_cache()
+                    except Exception:
+                        pass
+                    device = "cpu"
+                    pipe.to(torch.device("cpu"))
+                elif device == "cpu" and torch.cuda.is_available():
+                    raise RuntimeError(
+                        f"Failed to move pyannote pipeline to CPU: {e}. "
+                        "Частая причина: задачу обрабатывает diarization-worker-gpu при почти "
+                        "полной VRAM — остановите GPU-воркер и используйте только "
+                        "diarization-worker (профиль diarization, device: cpu). "
+                        "Проверьте: nvidia-smi (свободная память) и "
+                        "docker compose ps diarization-worker diarization-worker-gpu."
+                    ) from e
+                else:
+                    raise RuntimeError(
+                        f"Failed to move pyannote pipeline to device={device}: {e}"
+                    ) from e
 
             # Speaker constraints (optional).
             num_speakers = self.config.get("num_speakers")
@@ -165,7 +225,7 @@ class PyannoteDiarizationProvider(DiarizationProvider):
             )
 
             segments: List[DiarizationSegment] = []
-            for turn, _, speaker in diar.itertracks(yield_label=True):
+            for turn, _, speaker in _iter_labeled_turns(diar):
                 segments.append(
                     DiarizationSegment(
                         speaker=str(speaker),

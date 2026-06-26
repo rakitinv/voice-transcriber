@@ -15,9 +15,16 @@ from __future__ import annotations
 import os
 
 from celery import Celery
+from celery.signals import worker_ready
 
 from core.config import app_config
+from core.deployment_compat import collect_compatibility_issues, log_compatibility_issues
 from core.logging import logger
+
+
+def asr_slice_queue() -> str:
+    """Celery queue for parallel ASR slices (ТЗ §17). Override: VT_ASR_SLICE_QUEUE."""
+    return (os.environ.get("VT_ASR_SLICE_QUEUE") or "asr_fast").strip() or "asr_fast"
 
 
 def create_celery() -> Celery:
@@ -44,7 +51,7 @@ def create_celery() -> Celery:
         "timezone": "UTC",
         "enable_utc": True,
         "task_routes": {
-            "workers.tasks.asr.transcribe_slice": {"queue": "asr_fast"},
+            "workers.tasks.asr.transcribe_slice": {"queue": asr_slice_queue()},
             "workers.tasks.asr.finalize_parallel_transcript": {"queue": "asr_final"},
             "workers.tasks.asr.transcribe_file": {"queue": "asr_final"},
             "workers.tasks.asr.*": {"queue": "asr"},
@@ -79,4 +86,11 @@ from workers.tasks import asr, cleanup, embeddings, llm  # noqa: E402, F401
 
 if os.environ.get("VT_CELERY_ENABLE_DIARIZATION", "").strip().lower() in ("1", "true", "yes"):
     from workers.tasks import diarization  # noqa: E402, F401
+
+
+@worker_ready.connect
+def _log_deployment_compatibility_on_worker_start(**_kwargs) -> None:
+    issues = collect_compatibility_issues()
+    if issues:
+        log_compatibility_issues(issues, logger=logger)
 

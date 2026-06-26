@@ -9,7 +9,7 @@ import json
 import os
 import time
 from datetime import datetime, timezone
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 import httpx
@@ -47,6 +47,7 @@ from admin_api.pipeline_actions import (
 )
 from core.config import app_config
 from core.db import get_db
+from core.deployment_compat import QueueConsumerSlice, collect_compatibility_issues, deploy_profile
 from core.logging import logger
 
 router = APIRouter(prefix="/admin/api/v1", tags=["admin-v1"])
@@ -164,7 +165,7 @@ class ListPipelineEventsQueryParams(BaseModel):
     conversation_id: UUID | None = None
     event_type: str | None = Field(
         default=None,
-        description="Exact pipeline_events.event_type (e.g. asr_started, diarization_completed)",
+        description="Exact pipeline_events.event_type (e.g. asr_started, summary_failed)",
     )
 
 
@@ -272,6 +273,15 @@ class QueueConsumerCheck(BaseModel):
     detail: str | None = None
 
 
+class CompatibilityIssueOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+    severity: Literal["error", "warning"]
+    message: str
+    hint: str | None = None
+
+
 class InfrastructureResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -279,6 +289,11 @@ class InfrastructureResponse(BaseModel):
     redis: InfraCheck
     main_api: InfraCheck
     celery_queues: list[QueueConsumerCheck] = Field(default_factory=list)
+    deploy_profile: str = Field(
+        ...,
+        description="VT_DEPLOY_PROFILE: cpu (default stack) or gpu",
+    )
+    compatibility_issues: list[CompatibilityIssueOut] = Field(default_factory=list)
 
 
 class ExternalToolItem(BaseModel):
@@ -640,9 +655,27 @@ async def infrastructure_status(
         )
         for q in qrows
     ]
+    queue_slices = [
+        QueueConsumerSlice(queue=q.queue, consumer_responding=q.consumer_responding) for q in qrows
+    ]
+    compat = collect_compatibility_issues(celery_queues=queue_slices)
+    compatibility_issues = [
+        CompatibilityIssueOut(
+            code=i.code,
+            severity=i.severity,
+            message=i.message,
+            hint=i.hint,
+        )
+        for i in compat
+    ]
 
     return InfrastructureResponse(
-        postgres=pg, redis=rd, main_api=api, celery_queues=celery_queues
+        postgres=pg,
+        redis=rd,
+        main_api=api,
+        celery_queues=celery_queues,
+        deploy_profile=deploy_profile(),
+        compatibility_issues=compatibility_issues,
     )
 
 

@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from core.config import app_config
 from core.db import get_db
 from core.logging import logger
-from core.oauth_admin_webui import is_allowed_admin_oauth_next
+from core.oauth_admin_webui import is_allowed_admin_oauth_next, resolve_admin_oauth_landing_url
 from core.oauth_public import oauth_public_api_origin
 from core.oauth_state import (
     mint_extension_oauth_state,
@@ -147,7 +147,7 @@ def _oauth_redirect_to_webui(access_token: str, refresh_token: str) -> RedirectR
 
 def _oauth_redirect_to_admin_landing(landing_base: str, access_token: str, refresh_token: str) -> RedirectResponse:
     """Ops admin-webui: same fragment contract as Web UI, but landing origin is allowlisted (VT_ADMIN_WEBUI_*)."""
-    base = (landing_base or "").strip().rstrip("/")
+    base = resolve_admin_oauth_landing_url((landing_base or "").strip())
     frag = (
         f"access_token={quote(access_token, safe='')}&refresh_token={quote(refresh_token, safe='')}"
     )

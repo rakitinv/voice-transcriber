@@ -4,7 +4,7 @@
 
 Детали по переменным окружения, портам и профилям Docker: [docker/README.md](../docker/README.md). OAuth и идентичность: [AUTH_AND_IDENTITY.md](./AUTH_AND_IDENTITY.md), Ops-консоль: [ADMIN_OPS_CONSOLE.md](./ADMIN_OPS_CONSOLE.md).
 
-Автоматизация рутины: в корне репозитория есть **[Makefile](../Makefile)**; в CI — workflow [.github/workflows/release-artifacts.yml](../.github/workflows/release-artifacts.yml) (сборка wheel/sdist CLI и каталога `browser-extension/dist/`).
+Автоматизация рутины: в корне репозитория есть **[Makefile](../Makefile)**; в CI — workflow [.github/workflows/release-artifacts.yml](../.github/workflows/release-artifacts.yml) (сборка wheel/sdist CLI и каталога `browser-extension/dist/`). Сценарий «сборка → дистрибутив → копирование на хостинг → установка»: **[scripts/release/README.md](../scripts/release/README.md)** (`build-all.bat` на Windows, `install-or-update.sh` на Linux).
 
 ---
 
@@ -34,7 +34,7 @@
 
 - **Docker** с BuildKit, **Docker Compose** v2.
 - Для образов с Node: в Dockerfiles зафиксирован **Node 22** (`Dockerfile.webui`, `Dockerfile.admin-webui`).
-- Для API/worker: **Python 3.11** в образе (`Dockerfile.api`).
+- Для API/worker: **Python 3.12** в образе (`Dockerfile.api` и остальные `Dockerfile.*` с базой `python:3.12-slim`).
 - Доступ в интернет на этапе `docker build` / `npm ci` / `poetry install` (или кэши и корпоративный proxy).
 
 Рекомендация: зафиксировать **тег git** (semver или дата плюс SHA) и проставить его же в registry и в именах артефактов (CLI, zip расширения).
@@ -68,8 +68,11 @@ docker compose build
 
 ```bash
 docker compose build worker-llm worker-final-gpu diarization-worker diarization-worker-gpu
-docker compose --profile scale_llm --profile gpu --profile diarization build
+# Вручную — только сервисы профиля (не весь compose):
+docker compose --profile gpu build worker-final-gpu diarization-worker-gpu
 ```
+
+Скрипты `scripts/release/build-docker.*` при `VT_DOCKER_COMPOSE_PROFILES` собирают **только** сервисы профиля (см. `Get-ComposeProfileBuildServices` в `_lib.ps1`), а не `docker compose --profile … build` без имён (это пересобирало бы весь стек).
 
 См. [docker/README.md](../docker/README.md).
 
@@ -105,7 +108,10 @@ docker scout quickview REGISTRY/PROJECT/vt-api:TAG
 
 - **`VITE_ADMIN_API_BASE_URL`** — URL Admin API с точки зрения браузера.
 - **`VITE_PUBLIC_API_BASE_URL`** — URL основного API (OAuth, refresh).
-- **`VITE_ADMIN_WEBUI_SELF_URL`** — origin админки; должен совпадать с **`VT_ADMIN_WEBUI_ORIGIN`** / **`VT_ADMIN_WEBUI_ORIGINS`** на сервисе **api**.
+- **`VITE_ADMIN_WEBUI_SELF_URL`** — URL возврата после OAuth (например `https://host/admin`); origin должен входить в **`VT_ADMIN_WEBUI_ORIGIN`** / **`VT_ADMIN_WEBUI_ORIGINS`** на сервисе **api** **в runtime** (`/etc/voice-transcriber/voice-transcriber.env` при `compose up`), не только в `release.env` при сборке. Сборка кладёт подсказку в **`deploy/docker/public-urls.env`** в дистрибутиве.
+- **`VITE_ADMIN_WEBUI_BASE_PATH`** — префикс пути Vite, если админка открывается не с корня домена (например **`/admin/`** при прокси `https://host/admin/` → контейнер `admin-webui`). Без этого в `index.html` будут ссылки вида `/assets/…`, и внешний nginx отдаст статику основного Web UI — «белый экран».
+
+**Reverse proxy на хостинге:** для префикса `/admin/` нужен `proxy_pass http://…:3003/;` **со слэшем в конце** (см. [docker/nginx/voicer-reverse-proxy.example.conf](../docker/nginx/voicer-reverse-proxy.example.conf)). Отдельно проксируйте **Admin API** на `/admin/api/` → порт **8003**.
 
 Подробнее: [ADMIN_OPS_CONSOLE.md](./ADMIN_OPS_CONSOLE.md).
 
@@ -141,7 +147,7 @@ VT_S3_SECRET_KEY=...
 
 **Сеть и безопасность:** из контейнеров `api` / `worker` / `migrate` должен быть разрешён исходящий трафик к хосту БД и к endpoint S3 (security groups, корпоративный firewall, TLS).
 
-**Важно про штатный compose:** сервисы приложения объявляют **`depends_on: postgres`** и **`minio`**. Если вы **только переопределяете** `VT_*` через `.env`, локальные **`postgres`** и **`minio`** всё равно могут подниматься (приложение к ним не подключается, если URL указывают наружу). Это лишние ресурсы и порты; для чистого prod обычно делают **сайт-специфичную копию** `docker-compose.yml` или **дополнительный compose-файл**, где сервисы `postgres` и/или `minio` удалены, а `depends_on` на них убраны у `migrate`, `api`, `worker`, `admin-api` и т.д. (структура зависит от вашей политики merge compose на площадке).
+**Важно про штатный compose:** `VT_S3_*` в `docker-compose.yml` задаются как `${VT_S3_ENDPOINT:-http://minio:9000}` и т.д. — значения из `docker/.env` или `compose --env-file /etc/voice-transcriber/voice-transcriber.env` попадают во **все** сервисы (api, worker, diarization-worker, admin-api). Сервисы приложения объявляют **`depends_on: postgres`** и **`minio`**. Если вы **только переопределяете** `VT_*` через `.env`, локальные **`postgres`** и **`minio`** всё равно могут подниматься (приложение к ним не подключается, если URL указывают наружу). Это лишние ресурсы и порты; для чистого prod обычно делают **сайт-специфичную копию** `docker-compose.yml` или **дополнительный compose-файл**, где сервисы `postgres` и/или `minio` удалены, а `depends_on` на них убраны у `migrate`, `api`, `worker`, `admin-api` и т.д. (структура зависит от вашей политики merge compose на площадке).
 
 **Миграции:** сервис **`migrate`** должен выполняться с тем же **`VT_DATABASE_URL`**, что и рабочий API, чтобы Alembic применился к правильной базе.
 
@@ -158,7 +164,7 @@ VT_S3_SECRET_KEY=...
 
 ### 3.7. Запуск сервера без Docker (кратко)
 
-Возможен выкат на ВМ с Python 3.11 и Poetry (`poetry install --only main`), отдельные процессы uvicorn и Celery. Системные зависимости (ffmpeg и др.) нужно воспроизвести вручную по образцу `Dockerfile.api`. Для площадок с Compose этот путь обычно не нужен.
+Возможен выкат на ВМ с **Python 3.12** и Poetry (`poetry install --only main`), отдельные процессы uvicorn и Celery. Системные зависимости (ffmpeg и др.) нужно воспроизвести вручную по образцу `Dockerfile.api`. Для площадок с Compose этот путь обычно не нужен.
 
 ---
 
@@ -204,7 +210,9 @@ npm ci
 npm run build
 ```
 
-Или: `make release-extension` из корня.
+Для prod задайте **`VITE_DEFAULT_SERVER_URL`** (или **`VT_PUBLIC_API_URL`** в `scripts/release/release.env` — `build-extension` подставит его автоматически) **до** `npm run build`. Значение прошивается в бандл как Server URL по умолчанию; без переменной остаётся `http://localhost:8002`.
+
+Или: `make release-extension` из корня (локальный dev-дефолт) / `scripts/release/build-extension.ps1` с `release.env` для prod.
 
 Результат: **`browser-extension/dist/`** — загрузка как **распакованное расширение** в `chrome://extensions` (режим разработчика). См. [browser-extension/README.md](../browser-extension/README.md).
 
@@ -226,7 +234,7 @@ npm run build
 2. Пересборка **webui** и **admin-webui** с корректными **`VITE_*`**.
 3. Согласованные **`VT_JWT_SECRET`**, **`VT_DATABASE_URL`**, **`VT_REDIS_URL`**, **`VT_S3_*`**, OAuth-секреты.
 4. Миграции Alembic применены к целевой БД.
-5. Запущены **worker** и **worker-final**; при необходимости — diarization и GPU-профили ([docker/README.md](../docker/README.md)).
+5. Запущены **worker** и **worker-final** (или **`worker-final-gpu`** при profile **`gpu`**); при diarization — **`diarization-worker`** или **`diarization-worker-gpu`**. Режимы GPU: **split** (два сервиса, штатный) vs **unified** (один контейнер — backlog, см. [docker/README.md](../docker/README.md#gpu-deployment-modes-split-vs-unified)).
 6. Smoke: `GET /health` на API и Admin API; вход в Web UI и при использовании — Admin Web UI.
 7. (Рекомендуется) SBOM/скан образов перед приёмкой в prod.
 
@@ -250,5 +258,7 @@ npm run build
 | SBOM / скан уязвимостей образов | В документе (раздел 3.2); целевой процесс — перед prod на все публикуемые образы |
 | Версионирование API и changelog для CLI/расширения | Backlog: привязать к релизам и ломающим изменениям в [openapi.yaml](../openapi.yaml) |
 | Пример compose «только приложение» без встроенных Postgres/MinIO | Backlog площадки или репозитория: сайт-специфичный файл, чтобы не поднимать неиспользуемые сервисы при внешней БД/S3 |
+| ML base-образ (`Dockerfile.ml-base`) для GPU/CPU воркеров | ✅ [DEPENDENCIES_MIGRATION.md](./DEPENDENCIES_MIGRATION.md) фаза **5b**; `ml-base-cpu` / `ml-base-cuda`, child FROM base |
+| Unified GPU worker (один контейнер: ASR + diarization на GPU) | Backlog deployment; режим **split** остаётся штатным — [docker/README.md](../docker/README.md#gpu-deployment-modes-split-vs-unified) |
 
 При необходимости следующий шаг — внутренний лист «наш стенд»: таблица публичных URL и финальный `.env` без секретов в git.

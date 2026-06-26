@@ -17,6 +17,7 @@ import uuid
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy import inspect
 from sqlalchemy.dialects import postgresql
 
 revision = "admin_memberships_009"
@@ -26,21 +27,23 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        "admin_memberships",
-        sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
-        sa.Column(
-            "roles",
-            postgresql.JSONB(astext_type=sa.Text()),
-            nullable=False,
-            server_default=sa.text("'[\"admin\"]'::jsonb"),
-        ),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
-        sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("user_id", name="uq_admin_memberships_user_id"),
-    )
+    bind = op.get_bind()
+    if not inspect(bind).has_table("admin_memberships"):
+        op.create_table(
+            "admin_memberships",
+            sa.Column("id", postgresql.UUID(as_uuid=True), nullable=False),
+            sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
+            sa.Column(
+                "roles",
+                postgresql.JSONB(astext_type=sa.Text()),
+                nullable=False,
+                server_default=sa.text("'[\"admin\"]'::jsonb"),
+            ),
+            sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+            sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
+            sa.PrimaryKeyConstraint("id"),
+            sa.UniqueConstraint("user_id", name="uq_admin_memberships_user_id"),
+        )
 
     conn = op.get_bind()
     user_id: uuid.UUID | None = None
@@ -81,4 +84,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
+    if not inspect(bind).has_table("admin_memberships"):
+        return
     op.drop_table("admin_memberships")

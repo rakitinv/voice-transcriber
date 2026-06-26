@@ -1,5 +1,7 @@
 # Тестирование
 
+Сервер (`server/`): **Python 3.12**, зависимости через Poetry (`poetry install --with dev`). В Docker unit-тесты гоняются сервисом **`tests`** (образ `Dockerfile.api`, стадия **dev**) — см. [docker/README.md](../docker/README.md#unit-tests-compose-service-tests).
+
 ## Phase C — приёмка C7 + C1 (ручная + автотесты)
 
 Чеклист и порядок ручной проверки: **[PHASE_C_ACCEPTANCE.md](./PHASE_C_ACCEPTANCE.md)**.  

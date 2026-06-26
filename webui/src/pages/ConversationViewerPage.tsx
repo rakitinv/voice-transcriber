@@ -48,6 +48,7 @@ function isTranscriptProcessing(
   // В этом случае не показываем «в обработке».
   if (tier === "fast" && empty && st == null) return false;
   if (st && ["pending", "running"].includes(st)) return true;
+  if (st === "failed") return false;
   if (c.refetchRecommended && empty) return true;
   if (empty && c.audioUploadedAt && st !== "success" && st !== "failed") return true;
   return false;
@@ -201,7 +202,10 @@ export function ConversationViewerPage() {
               !conversation.audioUploadedAt
                 ? "Нет загруженного аудио"
                 : asrBusy
-                  ? "Распознавание уже выполняется"
+                  ? conversation.transcriptStatus === "running" ||
+                    conversation.transcriptStatus === "pending"
+                    ? "Распознавание уже выполняется"
+                    : "Дождитесь завершения текущего этапа"
                   : undefined
             }
           >

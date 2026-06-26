@@ -192,33 +192,108 @@ compose_profiles_include() {
   return 1
 }
 
-# При profile gpu: CPU-воркеры не должны конкурировать с GPU за asr_final / diarization / asr_fast.
+# VT_GPU_DEPLOY_MODE из release.env или серверного env-файла (split | unified).
+read_gpu_deploy_mode() {
+  local server_env="${1:-}"
+  local mode="${VT_GPU_DEPLOY_MODE:-}"
+  if [[ -z "$mode" && -n "$server_env" && -f "$server_env" ]]; then
+    mode="$(grep -E '^VT_GPU_DEPLOY_MODE=' "$server_env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\r' || true)"
+  fi
+  mode="${mode:-split}"
+  echo "${mode// /}"
+}
+
+# Согласовать VT_GPU_DEPLOY_MODE и профили gpu / gpu-unified (взаимоисключающие).
+normalize_gpu_compose_profiles() {
+  local server_env="${1:-}"
+  local mode csv out="" p
+  mode="$(read_gpu_deploy_mode "$server_env")"
+  csv="${VT_COMPOSE_PROFILES:-}"
+  [[ -n "$csv" ]] || return 0
+
+  local -a profs=() kept=()
+  local has_gpu=0 has_unified=0
+  IFS=',' read -ra profs <<< "$csv"
+  for p in "${profs[@]}"; do
+    p="${p// /}"
+    [[ -z "$p" ]] && continue
+    [[ "$p" == "gpu" ]] && has_gpu=1
+    [[ "$p" == "gpu-unified" ]] && has_unified=1
+  done
+
+  if [[ "$mode" == "unified" ]]; then
+    [[ "$has_gpu" -eq 1 ]] && echo "VT_GPU_DEPLOY_MODE=unified: profile gpu заменён на gpu-unified" >&2
+    for p in "${profs[@]}"; do
+      p="${p// /}"
+      [[ -z "$p" || "$p" == "gpu" ]] && continue
+      kept+=("$p")
+    done
+    has_unified=0
+    for p in "${kept[@]}"; do [[ "$p" == "gpu-unified" ]] && has_unified=1; done
+    [[ "$has_unified" -eq 0 ]] && kept+=("gpu-unified")
+  else
+    [[ "$has_unified" -eq 1 ]] && echo "VT_GPU_DEPLOY_MODE=split: profile gpu-unified убран" >&2
+    for p in "${profs[@]}"; do
+      p="${p// /}"
+      [[ -z "$p" || "$p" == "gpu-unified" ]] && continue
+      kept+=("$p")
+    done
+  fi
+
+  if ((${#kept[@]})); then
+    local IFS=,
+    VT_COMPOSE_PROFILES="${kept[*]}"
+  else
+    VT_COMPOSE_PROFILES=""
+  fi
+}
+
+_warn_main_worker_asr_fast() {
+  local server_env="$1"
+  [[ -f "$server_env" ]] || return 0
+  local q
+  q="$(grep -E '^VT_MAIN_WORKER_QUEUES=' "$server_env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\r' || true)"
+  if [[ -z "$q" ]] || [[ "$q" == *asr_fast* ]]; then
+    echo "" >&2
+    echo "=== ВНИМАНИЕ: GPU final ASR — уберите asr_fast из основного worker ===" >&2
+    echo "Иначе transcribe_slice (параллельная нарезка §17) может уйти на CPU worker." >&2
+    echo "В ${server_env} задайте, например:" >&2
+    echo "  VT_MAIN_WORKER_QUEUES=asr,cleanup          # если поднят worker-llm (profile scale_llm)" >&2
+    echo "  VT_MAIN_WORKER_QUEUES=asr,llm,cleanup       # если worker-llm не используется" >&2
+    echo "Слайсы asr_fast обрабатывает GPU-воркер (split: worker-final-gpu; unified: worker-gpu-unified)." >&2
+    echo "================================================================" >&2
+    echo "" >&2
+  fi
+}
+
+# При profile gpu / gpu-unified: взаимоисключение split vs unified и CPU-конкурентов.
 apply_gpu_worker_exclusivity() {
   local compose_dir="$1"
   shift
   local -a compose_cmd=("$@")
   local server_env="${ENV_FILE:-/etc/voice-transcriber/voice-transcriber.env}"
+  local mode
+  mode="$(read_gpu_deploy_mode "$server_env")"
+
+  if compose_profiles_include gpu-unified || [[ "$mode" == "unified" ]]; then
+    release_step "Unified GPU: останавливаем split GPU-воркеры и CPU-конкурентов"
+    (cd "$compose_dir" && "${compose_cmd[@]}" stop worker-final-gpu 2>/dev/null || true)
+    (cd "$compose_dir" && "${compose_cmd[@]}" stop diarization-worker-gpu 2>/dev/null || true)
+    (cd "$compose_dir" && "${compose_cmd[@]}" stop worker-final 2>/dev/null || true)
+    (cd "$compose_dir" && "${compose_cmd[@]}" stop diarization-worker 2>/dev/null || true)
+    _warn_main_worker_asr_fast "$server_env"
+    return 0
+  fi
+
   compose_profiles_include gpu || return 0
 
-  release_step "GPU profile: останавливаем CPU-конкурентов (worker-final, diarization-worker)"
+  (cd "$compose_dir" && "${compose_cmd[@]}" stop worker-gpu-unified 2>/dev/null || true)
+
+  release_step "GPU profile (split): останавливаем CPU-конкурентов (worker-final, diarization-worker)"
   (cd "$compose_dir" && "${compose_cmd[@]}" stop worker-final 2>/dev/null || true)
   (cd "$compose_dir" && "${compose_cmd[@]}" stop diarization-worker 2>/dev/null || true)
 
-  if [[ -f "$server_env" ]]; then
-    local q
-    q="$(grep -E '^VT_MAIN_WORKER_QUEUES=' "$server_env" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '\r' || true)"
-    if [[ -z "$q" ]] || [[ "$q" == *asr_fast* ]]; then
-      echo "" >&2
-      echo "=== ВНИМАНИЕ: GPU final ASR — уберите asr_fast из основного worker ===" >&2
-      echo "Иначе transcribe_slice (параллельная нарезка §17) может уйти на CPU worker." >&2
-      echo "В ${server_env} задайте, например:" >&2
-      echo "  VT_MAIN_WORKER_QUEUES=asr,cleanup          # если поднят worker-llm (profile scale_llm)" >&2
-      echo "  VT_MAIN_WORKER_QUEUES=asr,llm,cleanup       # если worker-llm не используется" >&2
-      echo "Слайсы asr_fast обрабатывает worker-final-gpu (очереди asr_fast,asr_final)." >&2
-      echo "================================================================" >&2
-      echo "" >&2
-    fi
-  fi
+  _warn_main_worker_asr_fast "$server_env"
 }
 
 # Базовый стек без profile-only сервисов (Compose v5 иначе собирает и diarization-worker).
@@ -229,8 +304,10 @@ compose_default_build_services() {
 # Сервисы, которые нужно собрать для optional compose profile (не весь стек).
 compose_profile_build_services() {
   case "${1// /}" in
-    gpu) echo "worker-final-gpu diarization-worker-gpu" ;;
-    diarization) echo "diarization-worker" ;;
+    gpu) echo "ml-base-cuda worker-final-gpu diarization-worker-gpu" ;;
+    gpu-unified) echo "ml-base-cuda worker-gpu-unified" ;;
+    diarization) echo "ml-base-cpu diarization-worker" ;;
+    ml-base) echo "ml-base-cpu ml-base-cuda" ;;
     scale_llm) echo "worker-llm" ;;
     test) echo "tests" ;;
     *) echo "" ;;
@@ -241,7 +318,9 @@ compose_profile_build_services() {
 compose_service_required_profiles() {
   case "${1// /}" in
     worker-final-gpu|diarization-worker-gpu) echo "gpu" ;;
+    worker-gpu-unified) echo "gpu-unified" ;;
     diarization-worker) echo "diarization" ;;
+    ml-base-cpu|ml-base-cuda) echo "ml-base" ;;
     worker-llm) echo "scale_llm" ;;
     tests) echo "test" ;;
     *) echo "" ;;

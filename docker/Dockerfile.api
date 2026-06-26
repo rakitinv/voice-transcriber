@@ -5,10 +5,17 @@
 #   - **base** — системные пакеты, код, Poetry (без установки зависимостей проекта).
 #   - **dev** — `main` + группа **dev** (pytest и др.); для сервиса `tests` в compose (`build.target: dev`).
 #   - **runtime** — только **main** (production API); последняя стадия = образ по умолчанию для **api** / **admin-api** / **migrate**.
-FROM python:3.11-slim AS base
+FROM python:3.12-slim AS base
+
+# Медленные/нестабильные ссылки до PyPI: таймауты и зеркало через build-arg (см. docker/README.md).
+ARG PIP_INDEX_URL=https://pypi.org/simple
 
 ENV PIP_BREAK_SYSTEM_PACKAGES=1 \
-    PYTHONPATH="/app/server:$PYTHONPATH"
+    PYTHONPATH="/app/server:$PYTHONPATH" \
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_DEFAULT_TIMEOUT=600 \
+    PIP_RETRIES=10 \
+    POETRY_HTTP_TIMEOUT=600
 
 WORKDIR /app
 
@@ -27,10 +34,10 @@ COPY configs/ /app/configs/
 WORKDIR /app/server
 
 # setuptools/wheel нужны, чтобы PEP517-сборки (cryptography → poetry) не падали с pkg_resources
-RUN --mount=type=cache,target=/root/.cache/pip \
+RUN --mount=type=cache,target=/root/.cache/pip,id=vt-api-pip \
     pip install --upgrade pip setuptools wheel
 
-RUN --mount=type=cache,target=/root/.cache/pip \
+RUN --mount=type=cache,target=/root/.cache/pip,id=vt-api-pip \
     pip install poetry poetry-plugin-export
 
 RUN poetry config virtualenvs.create false
@@ -39,8 +46,8 @@ RUN poetry config virtualenvs.create false
 # Development / CI image: main + dev (pytest, ruff, …). Не использовать как prod API.
 # -----------------------------------------------------------------------------
 FROM base AS dev
-RUN --mount=type=cache,target=/root/.cache/pip \
-    rm -f poetry.lock && \
+RUN --mount=type=cache,target=/root/.cache/pip,id=vt-api-pip \
+    --mount=type=cache,target=/root/.cache/pypoetry,id=vt-api-pypoetry \
     poetry install --with dev --no-interaction --no-ansi --no-root
 WORKDIR /app/server
 # Переопределение: docker compose run --rm tests python -m pytest tests/unit/test_admin_sprint4.py -q
@@ -50,8 +57,8 @@ CMD ["python", "-m", "pytest", "tests/unit", "-q", "--tb=short"]
 # Production API image (прежний набор зависимостей: только main).
 # -----------------------------------------------------------------------------
 FROM base AS runtime
-RUN --mount=type=cache,target=/root/.cache/pip \
-    rm -f poetry.lock && \
+RUN --mount=type=cache,target=/root/.cache/pip,id=vt-api-pip \
+    --mount=type=cache,target=/root/.cache/pypoetry,id=vt-api-pypoetry \
     poetry install --only main --no-interaction --no-ansi --no-root
 EXPOSE 8000
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

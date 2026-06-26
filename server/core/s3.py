@@ -210,13 +210,14 @@ class S3Storage:
         """Delete all files for a conversation."""
         prefix = f"users/{user_id}/conversations/{conversation_id}/"
         paginator = self.client.get_paginator("list_objects_v2")
+        deleted = 0
         for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
-            if "Contents" in page:
-                objects = [{"Key": obj["Key"]} for obj in page["Contents"]]
-                self.client.delete_objects(
-                    Bucket=self.bucket, Delete={"Objects": objects}
-                )
-        logger.info(f"Deleted conversation files: {prefix}")
+            for obj in page.get("Contents") or []:
+                key = obj["Key"]
+                # delete_object avoids DeleteObjects Content-MD5 requirement on strict S3 backends.
+                self.client.delete_object(Bucket=self.bucket, Key=key)
+                deleted += 1
+        logger.info(f"Deleted conversation files: {prefix} ({deleted} objects)")
 
 
 # Global storage instance

@@ -10,6 +10,7 @@ Chromium (MV3) extension: **shell popup** (login, settings, open side panel, upl
 
 ```bash
 npm ci
+# Prod (optional): VITE_DEFAULT_SERVER_URL=https://voicer.example.com npm run build
 npm run build    # production bundle → dist/
 npm run test     # Vitest unit tests (no browser)
 npm run dev      # Vite dev server

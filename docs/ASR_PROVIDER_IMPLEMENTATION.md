@@ -89,7 +89,7 @@
 
 - Реализация: `app/asr/gigaam.py`, `app/asr/gigaam_engine.py`.
 - Конфиг: `configs/asr.yaml` → `providers.gigaam`; документация: [`GIGAAM_ASR.md`](./GIGAAM_ASR.md).
-- Optional Poetry group `gigaam`; GPU-образ `docker/Dockerfile.worker.gpu` (`poetry install --with gigaam`).
+- GPU-образ `docker/Dockerfile.worker.gpu` (`poetry install --with gigaam` + `install-torch.sh cuda`).
 
 ---
 

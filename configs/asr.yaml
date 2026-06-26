@@ -28,7 +28,7 @@ providers:
     enabled: true
     # Варианты: v3_e2e_rnnt (рекомендуется), v3_e2e_ctc, v3_rnnt, …
     model: v3_e2e_rnnt
-    # Длинные файлы: transcribe_longform (нужен VT_HF_TOKEN и poetry --with gigaam + longform extra)
+    # Длинные файлы: transcribe_longform (нужен VT_HF_TOKEN и образ worker-final-gpu)
     longform_enabled: true
     hf_token_env: VT_HF_TOKEN
     model_cache_dir: /models

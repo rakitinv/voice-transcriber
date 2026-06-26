@@ -289,6 +289,20 @@ def _fast_transcript_row(db: Session, conversation: Conversation) -> Transcript 
     return None
 
 
+def _latest_asr_transcript_row(db: Session, conversation: Conversation) -> Transcript | None:
+    """Последняя ASR-ревизия любого статуса (для UI при failed/pending без success final)."""
+    return (
+        db.query(Transcript)
+        .filter(
+            Transcript.conversation_id == conversation.id,
+            Transcript.user_id == conversation.user_id,
+            Transcript.kind == "asr",
+        )
+        .order_by(Transcript.revision.desc())
+        .first()
+    )
+
+
 def _final_view_transcript_row(db: Session, conversation: Conversation) -> Transcript | None:
     """Стадия «final» для UI: сначала успешная диаризация, иначе последний ASR не из ветки fast."""
     diar = (
@@ -361,7 +375,9 @@ def _refetch_recommended(db: Session, conversation: Conversation, row: Transcrip
     Used by WebUI polling; avoids infinite polling when diarization is disabled or has failed.
     """
     if row is None:
-        return True
+        row = _latest_asr_transcript_row(db, conversation)
+        if row is None:
+            return True
     if row.status in ("pending", "running"):
         return True
 
@@ -755,6 +771,8 @@ async def get_conversation(
         row = _fast_transcript_row(db, conversation)
     elif tier == "final":
         row = _final_view_transcript_row(db, conversation)
+        if row is None:
+            row = _latest_asr_transcript_row(db, conversation)
     else:
         row = active_row
 

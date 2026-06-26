@@ -2,6 +2,8 @@
 
 Run the full speech transcription stack locally with Docker Compose.
 
+**Серверные образы** (`api`, `worker`, `diarization`, `worker-final-gpu`) собираются на **Python 3.12** (`python:3.12-slim`). Локальная разработка `server/` и пересборка `poetry.lock` — тоже на **3.12** (см. [docs/DEPENDENCIES_MIGRATION.md](../docs/DEPENDENCIES_MIGRATION.md)).
+
 ## Services
 
 | Service  | Port(s) на хосте | Описание |
@@ -13,9 +15,10 @@ Run the full speech transcription stack locally with Docker Compose.
 | **worker** | —         | Celery: **`VT_MAIN_WORKER_QUEUES`** по умолчанию **asr_fast**, **asr**, **llm**, **cleanup** |
 | **worker-llm** | **`scale_llm`** | Только очередь **llm** (§7.6 summary, embeddings); поднимайте вместе с **`VT_MAIN_WORKER_QUEUES=asr_fast,asr,cleanup`** у **worker**, чтобы не было двух потребителей **llm** |
 | **worker-final** | —   | Celery (очередь **asr_final** — тяжелый/финальный ASR по ТЗ §17, CPU) |
-| **worker-final-gpu** | **`gpu`** | Celery (**`asr_fast`**, **`asr_final`**, GPU; образ **`Dockerfile.worker.gpu`**, CUDA через CTranslate2) |
-| **diarization-worker** | — | Diarization Celery worker: **CPU**-сборка PyTorch (`build.args.DIARIZATION_TORCH=cpu`), очередь **diarization** (compose profile `diarization`) |
-| **diarization-worker-gpu** | — | Diarization Celery worker: **CUDA**-сборка PyTorch (`DIARIZATION_TORCH=cuda`), профиль compose **`gpu`** |
+| **worker-final-gpu** | **`gpu`** | Celery (**`asr_fast`**, **`asr_final`**, GPU; split-режим) |
+| **worker-gpu-unified** | **`gpu-unified`** | Celery (**`asr_fast`**, **`asr_final`**, **`diarization`**, GPU; unified-режим) |
+| **diarization-worker** | — | Diarization Celery worker: **CPU**, очередь **diarization** (compose profile `diarization`) |
+| **diarization-worker-gpu** | — | Diarization Celery worker: **CUDA** (split-режим, профиль compose **`gpu`**) |
 | **migrate** | —        | Однократно: `alembic upgrade head` |
 | **tests** | — | **Не** стартует с `up`. Образ **dev** (pytest в слое образа): `docker compose run --rm tests` — см. раздел [Unit tests](#unit-tests-compose-service-tests) |
 | **postgres** | 5435→5432 (`POSTGRES_PUBLISH_PORT`) | PostgreSQL 16 |
@@ -274,23 +277,77 @@ VT_ASR_COMPUTE_TYPE=float16
 VT_DIARIZATION_DEVICE=cuda
 ```
 
+## GPU deployment modes: split vs unified
+
+На GPU-ноде тяжёлые ML-задачи можно развернуть в двух режимах (взаимоисключающих):
+
+| Режим | Сервисы | Очереди Celery | Когда выбирать |
+|-------|---------|----------------|----------------|
+| **split** (по умолчанию) | `worker-final-gpu` + `diarization-worker-gpu` | `asr_fast`, `asr_final` / `diarization` | Независимый перезапуск, diarization на отдельной VM, разное масштабирование |
+| **unified** | `worker-gpu-unified` | `asr_fast`, `asr_final`, `diarization` | Одна GPU, меньше дублирования VRAM, проще ops |
+
+**split:** не запускайте CPU- и GPU-варианты одной очереди одновременно (`worker-final` vs `worker-final-gpu`, `diarization-worker` vs `diarization-worker-gpu`) — см. разделы ниже.
+
+**unified:** один Celery-процесс на **`ml-base-cuda`**, volume **`gpu-ml-models:/models`**. Профиль compose **`gpu-unified`**. `install-or-update.sh` при **`VT_GPU_DEPLOY_MODE=unified`** подставляет `gpu-unified` вместо `gpu` и останавливает split-воркеры.
+
+```bash
+cd docker
+# unified (одна GPU)
+docker compose stop worker-final-gpu diarization-worker-gpu 2>/dev/null || true
+docker compose --profile gpu-unified up -d --build worker-gpu-unified
+
+# split (по умолчанию)
+docker compose stop worker-gpu-unified 2>/dev/null || true
+docker compose --profile gpu up -d --build worker-final-gpu diarization-worker-gpu
+```
+
+Prod env (`/etc/voice-transcriber/voice-transcriber.env`):
+
+```env
+# unified
+VT_GPU_DEPLOY_MODE=unified
+VT_COMPOSE_PROFILES=gpu-unified,scale_llm
+VT_MAIN_WORKER_QUEUES=asr,cleanup
+VT_GPU_UNIFIED_CONCURRENCY=2
+
+# split (альтернатива)
+# VT_GPU_DEPLOY_MODE=split
+# VT_COMPOSE_PROFILES=gpu,scale_llm
+```
+
+Systemd (опционально): `docker/systemd/voice-transcriber-worker-gpu-unified.service`.
+
+**VRAM:** два split-контейнера на **одной** карте могут конкурировать за память (`nvidia-smi` перед выбором режима). Unified снижает дублирование загрузки моделей в RAM/VRAM, но не убирает пиковую нагрузку при параллельных задачах — настройте `VT_GPU_UNIFIED_CONCURRENCY` / `VT_ASR_FINAL_CONCURRENCY`.
+
+**Дублирование образов на диске:** split и unified строятся из **`Dockerfile.ml-base`** (`ml-base-cuda`); слои torch общие. См. [DEPENDENCIES.md](../docs/DEPENDENCIES.md#docker-образы-и-дублирование-слоёв).
+
 ## Diarization: CPU vs CUDA images
 
-В `docker/Dockerfile.diarization` один Dockerfile собирает **два варианта** образа через build-arg:
+Образы diarization и **`worker-final-gpu`** строятся поверх общего **ML base** ([`Dockerfile.ml-base`](Dockerfile.ml-base), фаза 5b в [DEPENDENCIES_MIGRATION.md](../docs/DEPENDENCIES_MIGRATION.md)):
 
-| Значение `DIARIZATION_TORCH` | Поведение |
-|------------------------------|-----------|
-| **`cpu`** (по умолчанию) | Ставит зависимости через `poetry install --with diarization` (группа `diarization` опциональна). Torch/torchaudio берутся из версии, закреплённой в группе `diarization`. |
-| **`cuda`** | После `poetry install --with diarization` обновляет `torch/torchaudio` до CUDA wheels с индекса PyTorch (`--index-url https://download.pytorch.org/whl/cu128`). |
+| Child-сервис | ML base | Torch |
+|--------------|---------|-------|
+| **`diarization-worker`** | `ml-base-cpu` | CPU (`whl/cpu`) |
+| **`diarization-worker-gpu`** | `ml-base-cuda` | CUDA (`whl/cu128`) |
+| **`worker-final-gpu`** | `ml-base-cuda` | CUDA (тот же слой, что у diarization GPU) |
+
+Сборка base (при смене `poetry.lock` / torch):
+
+```bash
+cd docker
+docker compose --profile ml-base build ml-base-cpu ml-base-cuda
+```
+
+Child-образы в compose собираются **targets** в том же `Dockerfile.ml-base` (`diarization-worker`, `worker-final-gpu`, …) — BuildKit переиспользует стадии `ml-base-*` без отдельного `depends_on`. Для registry с предзагруженным base: тонкие [`Dockerfile.diarization`](Dockerfile.diarization) / [`Dockerfile.worker.gpu`](Dockerfile.worker.gpu) с `ARG ML_BASE_IMAGE`.
 
 В `docker-compose.yml`:
 
-- Сервис **`diarization-worker`** — `args: { DIARIZATION_TORCH: cpu }`, **профиль `diarization`**. Поднимается явно: `docker compose --profile diarization up -d --build diarization-worker`.
-- Сервис **`diarization-worker-gpu`** — `args: { DIARIZATION_TORCH: cuda }`, профиль **`gpu`**. Поднимается явно: `docker compose --profile gpu up -d …`.
+- Сервис **`diarization-worker`** — `ML_BASE_IMAGE: voice-transcriber-ml-base-cpu:…`, **профиль `diarization`**. Поднимается явно: `docker compose --profile diarization up -d --build diarization-worker`.
+- Сервис **`diarization-worker-gpu`** — `ML_BASE_IMAGE: voice-transcriber-ml-base-cuda:…`, профиль **`gpu`**. Поднимается явно: `docker compose --profile gpu up -d …`.
 
 **Важно:** оба воркера слушают одну и ту же очередь Celery **`diarization`**. Не запускайте CPU и GPU воркеры одновременно, если не хотите дублировать обработку одной и той же очереди. Обычно в проде активен **ровно один** diarization-сервис.
 
-**Сборка и сеть:** образ diarization ставит PyTorch и колёса **`nvidia-*`** (очень большие файлы с PyPI). Первая сборка часто занимает **десятки минут** и требует устойчивого интернета. В `Dockerfile.diarization` заданы увеличенные **`PIP_DEFAULT_TIMEOUT`** и **`PIP_RETRIES`**, чтобы реже ловить `Read timed out` / `Cannot install nvidia-*`. После обрыва достаточно повторить `docker compose build …` — слой с `--mount=type=cache` для pip обычно не качает всё заново. Если diarization вам не нужен, не включайте профиль **`diarization`** (и не задавайте `COMPOSE_PROFILES`, который подтягивает этот сервис без явного флага).
+**Сборка и сеть:** **ml-base** и CUDA child-образы качают PyTorch и колёса **`nvidia-*`** (сотни МБ). Первая сборка **ml-base-cuda** — **десятки минут**; не уводите ПК в сон. При таймауте перезапустите только упавший сервис: `docker compose --profile ml-base build ml-base-cuda` или `docker compose --profile gpu build worker-final-gpu`. Кэш слоёв Docker и pip (`--mount=type=cache`) сохраняют уже собранное. После готового base пересборка child при правках только `server/` — быстрая. `pip-retry.sh`, `PIP_DEFAULT_TIMEOUT=1800`.
 
 ### Первое развёртывание: какой сервис выбрать
 
@@ -366,6 +423,8 @@ docker compose build --build-arg DIARIZATION_TORCH=cuda diarization-worker-gpu
 
 ## Diarization: offline models (pyannote) — прогрев кэша
 
+Полная таблица «что с Hugging Face для локальной работы» (ASR, diarization, GigaAM, токен, чеклист offline): **[docs/OFFLINE_AND_HUGGINGFACE.md](../docs/OFFLINE_AND_HUGGINGFACE.md)**.
+
 Если `configs/diarization.yaml` содержит `offline_models: true`, diarization-воркер **не будет скачивать** модели из сети
 (`HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`). В этом режиме модели должны быть заранее доступны в каталоге кэша
 (`model_cache_dir`, по умолчанию `/models`, примонтирован как volume `diarization-models`).
@@ -377,7 +436,7 @@ docker compose build --build-arg DIARIZATION_TORCH=cuda diarization-worker-gpu
 - `configs/diarization.yaml`: `offline_models: false`
 - Задайте токен: `VT_HF_TOKEN` (HuggingFace) в окружении/`.env` рядом с `docker-compose.yml`
 
-2) Поднимите только diarization-воркер (он скачает модель при первом реальном запуске задачи):
+2) Поднимите diarization-воркер и прогрейте кэш (см. также [OFFLINE_AND_HUGGINGFACE.md](../docs/OFFLINE_AND_HUGGINGFACE.md)):
 
 ```bash
 docker compose --profile diarization up -d diarization-worker

@@ -7,6 +7,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.models import Conversation, RecordingSessionSummary, Transcript, User
+from app.services.summary_pipeline_events import record_summary_pipeline_events
 
 from ..celery_app import celery_app
 from core.config import app_config
@@ -117,6 +118,7 @@ def summarize_recording_session(self, user_id: str, recording_session_id: str) -
         return {"status": "skipped", "reason": "no_provider"}
 
     ids_included: list[str] = []
+    chain_ids: list[UUID] = []
     try:
         with session_scope() as db:
             row = (
@@ -145,12 +147,20 @@ def summarize_recording_session(self, user_id: str, recording_session_id: str) -
                 .all()
             )
             ordered = ordered_chain_segments(convs)
+            chain_ids = [c.id for c in ordered]
             bundle, ids_included = _bundle_chain_markdown(ordered, db=db, max_chars=max_chars)
 
             user_row = db.query(User).filter(User.id == uid).first()
             summary_lang = (
                 llm_summary_output_language(user_row.preferences) if user_row else "ru"
             )
+
+            if ids_included:
+                record_summary_pipeline_events(
+                    db,
+                    [UUID(x) for x in ids_included],
+                    "summary_started",
+                )
 
         if not bundle.strip():
             msg = "no_final_segments"
@@ -163,6 +173,14 @@ def summarize_recording_session(self, user_id: str, recording_session_id: str) -
                 if r2 is not None:
                     r2.status = "failed"
                     r2.error = msg
+                if chain_ids:
+                    record_summary_pipeline_events(
+                        db,
+                        chain_ids,
+                        "summary_failed",
+                        exc=msg,
+                        reason_code="no_final_segments",
+                    )
             return {"status": "failed", "error": msg}
 
         summary_md = provider.summarize_chain_markdown(
@@ -184,6 +202,12 @@ def summarize_recording_session(self, user_id: str, recording_session_id: str) -
                     "segment_count": len(ids_included),
                     "summary_language": summary_lang,
                 }
+            if ids_included:
+                record_summary_pipeline_events(
+                    db,
+                    [UUID(x) for x in ids_included],
+                    "summary_completed",
+                )
 
         storage.upload_recording_session_summary(
             summary_md, user_id, recording_session_id, encrypt=True
@@ -207,4 +231,12 @@ def summarize_recording_session(self, user_id: str, recording_session_id: str) -
             if r4 is not None:
                 r4.status = "failed"
                 r4.error = err
+            targets = [UUID(x) for x in ids_included] if ids_included else chain_ids
+            if targets:
+                record_summary_pipeline_events(
+                    db,
+                    targets,
+                    "summary_failed",
+                    exc=e,
+                )
         raise

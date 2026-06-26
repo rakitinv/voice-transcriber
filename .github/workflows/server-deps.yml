@@ -1,0 +1,128 @@
+# Проверка зависимостей server/ (Poetry lock + install) и ML base Docker на Python 3.12
+name: Server dependencies
+
+on:
+  push:
+    paths:
+      - "server/pyproject.toml"
+      - "server/poetry.lock"
+      - "docker/Dockerfile.ml-base"
+      - "docker/Dockerfile.diarization"
+      - "docker/Dockerfile.worker.gpu"
+      - "docker/scripts/install-torch.sh"
+      - "docker/diarization_strip_torch_cuda.py"
+      - ".github/workflows/server-deps.yml"
+  pull_request:
+    paths:
+      - "server/pyproject.toml"
+      - "server/poetry.lock"
+      - "docker/Dockerfile.ml-base"
+      - "docker/Dockerfile.diarization"
+      - "docker/Dockerfile.worker.gpu"
+      - "docker/scripts/install-torch.sh"
+      - "docker/diarization_strip_torch_cuda.py"
+      - ".github/workflows/server-deps.yml"
+  workflow_dispatch:
+
+jobs:
+  poetry-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system packages (git for GigaAM)
+        run: sudo apt-get update && sudo apt-get install -y git
+
+      - name: Install Poetry
+        run: pip install poetry==2.3.2
+
+      - name: poetry check
+        working-directory: server
+        run: poetry check
+
+      - name: poetry install (main)
+        working-directory: server
+        run: |
+          poetry config virtualenvs.create false
+          poetry install --only main --no-interaction --no-ansi --no-root
+
+      - name: poetry install (diarization group)
+        working-directory: server
+        run: poetry install --with diarization --no-interaction --no-ansi --no-root
+
+      - name: Smoke import pyannote
+        working-directory: server
+        run: python -c "from pyannote.audio import Pipeline; import torch; print(torch.__version__)"
+
+      - name: poetry install (gigaam group)
+        working-directory: server
+        run: poetry install --with gigaam --no-interaction --no-ansi --no-root
+
+      - name: Smoke import gigaam
+        working-directory: server
+        run: python -c "import gigaam; print('gigaam ok')"
+
+  ml-base-docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build ml-base CPU
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.ml-base
+          target: ml-base-cpu
+          tags: voice-transcriber-ml-base-cpu:ci
+          load: true
+          cache-from: type=gha,scope=ml-base-cpu
+          cache-to: type=gha,mode=max,scope=ml-base-cpu
+
+      - name: Smoke child diarization FROM ml-base-cpu
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.ml-base
+          target: diarization-worker
+          tags: voice-transcriber-diarization-smoke:ci
+          load: true
+          cache-from: type=gha,scope=diarization-smoke-cpu
+
+      - name: Build ml-base CUDA
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.ml-base
+          target: ml-base-cuda
+          tags: voice-transcriber-ml-base-cuda:ci
+          load: true
+          cache-from: type=gha,scope=ml-base-cuda
+          cache-to: type=gha,mode=max,scope=ml-base-cuda
+
+      - name: Smoke child worker-final-gpu
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.ml-base
+          target: worker-final-gpu
+          tags: voice-transcriber-worker-gpu-smoke:ci
+          load: true
+          cache-from: type=gha,scope=worker-gpu-smoke
+
+      - name: Smoke unified GPU worker target
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile.ml-base
+          target: worker-gpu-unified
+          tags: voice-transcriber-worker-gpu-unified-smoke:ci
+          load: true
+          cache-from: type=gha,scope=worker-gpu-unified-smoke

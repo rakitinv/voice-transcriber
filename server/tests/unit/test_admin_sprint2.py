@@ -86,6 +86,9 @@ def test_infrastructure_includes_celery_queues(client_with_admin_override: TestC
     assert "celery_queues" in body
     assert isinstance(body["celery_queues"], list)
     assert body["celery_queues"][0]["queue"] == "asr"
+    assert body.get("deploy_profile") in ("cpu", "gpu")
+    assert "compatibility_issues" in body
+    assert isinstance(body["compatibility_issues"], list)
 
 
 def test_sanitize_meta_drops_segments() -> None:

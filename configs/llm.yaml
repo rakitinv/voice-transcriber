@@ -5,6 +5,7 @@
 session_summary_enabled: true
 session_summary_max_input_chars: 120000
 
+# ollama | vllm | openai (vLLM и LM Studio — OpenAI-compatible /v1/chat/completions)
 default_provider: ollama
 
 providers:
@@ -13,13 +14,19 @@ providers:
     base_url: http://localhost:11434
     # Имя должно совпадать с строкой в `ollama list` на машине с Ollama (иначе POST /api/generate → 404).
     model: ilyagusev/saiga_llama3:latest
+  # vLLM на хосте (Docker worker: http://172.17.0.1:PORT/v1 или host.docker.internal)
+  vllm:
+    enabled: false
+    base_url: http://127.0.0.1:8000/v1
+    model: Qwen/Qwen3-14B-AWQ
+    api_key: EMPTY
   lmstudio:
     enabled: false
   llama_cpp:
     enabled: false
-  vllm:
-    enabled: false
   openai:
     enabled: false
+    base_url: https://api.openai.com/v1
+    model: gpt-4o-mini
     api_key: CHANGE_ME
 

@@ -1,0 +1,4 @@
+# Shell scripts and release env must use LF (Linux servers run bash).
+*.sh text eol=lf
+docker/scripts/** text eol=lf
+scripts/release/release.env.example text eol=lf

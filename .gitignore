@@ -19,9 +19,23 @@ browser-extension/dist/
 webui/dist/
 admin-webui/dist/
 
+# Release bundles (scripts/release)
+scripts/release/release.env
+dist/release/
+# Accidental `> nul` in PowerShell creates a file named NUL (reserved on Windows)
+**/nul
+**/NUL
+# Local docker save artifacts (release bundles use dist/release/)
+docker/*.tar
+
+# IDE (local)
+.vscode/
+
 # Python virtual envs / caches (repo-root convenience)
 .venv/
 venv/
+cli/dist/
+*.egg-info/
 __pycache__/
 .pytest_cache/
 .mypy_cache/

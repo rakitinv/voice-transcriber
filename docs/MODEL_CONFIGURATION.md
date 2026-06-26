@@ -35,7 +35,7 @@
 ```yaml
 default_provider: whisper          # fallback
 realtime_provider: whisper         # WebSocket / chunk на API
-final_provider: gigaam             # Celery batch ASR (нужен worker-final-gpu + poetry --with gigaam)
+final_provider: gigaam             # Celery batch ASR (нужен worker-final-gpu)
 final_recognition_model: v3_e2e_rnnt
 ```
 
@@ -54,7 +54,7 @@ final_recognition_model: v3_e2e_rnnt
 
 - Провайдер `gigaam` в `configs/asr.yaml` по умолчанию **выключен** (`enabled: false`).
 - Рекомендуемая модель: `v3_e2e_rnnt`; на GPU-воркере: `VT_ASR_DEFAULT_PROVIDER=gigaam`, `VT_ASR_DEVICE=cuda`.
-- Зависимости: Poetry group `gigaam` (`poetry install --with gigaam`); образ `worker-final-gpu`.
+- Зависимости: numpy 2.x в Poetry (`main`); GigaAM — группа **`gigaam`** в образе `worker-final-gpu`.
 
 См. также: [`ASR_PROVIDER_IMPLEMENTATION.md`](./ASR_PROVIDER_IMPLEMENTATION.md), [`docker/README.md`](../docker/README.md).
 
@@ -67,6 +67,8 @@ final_recognition_model: v3_e2e_rnnt
   - `turn_level_retranscription`: политика «перераспознавать по turn или только назначать спикеров»
 
 См. канон поведения и версионирования: [`DIARIZATION_ALIGNMENT_VERSIONING.md`](./DIARIZATION_ALIGNMENT_VERSIONING.md).
+
+**Прогрев моделей и offline:** какие репозитории Hugging Face принять, как один раз скачать веса в volume `/models` и включить `offline_models: true` — [`OFFLINE_AND_HUGGINGFACE.md`](./OFFLINE_AND_HUGGINGFACE.md).
 
 ### Важно про CPU/GPU
 CPU/CUDA колёса PyTorch выбираются **на этапе сборки образа** diarization-worker (см. [`docker/README.md`](../docker/README.md)),

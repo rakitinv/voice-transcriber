@@ -9,9 +9,13 @@
 - **[BROWSER_EXTENSION_UI.md](./BROWSER_EXTENSION_UI.md)** — соглашения по UI расширения (Side Panel, popup, контекстное меню, persist состояния).
 - **[AUTH_AND_IDENTITY.md](./AUTH_AND_IDENTITY.md)** — OAuth, идентичность, сессия сервиса (расширение + Web UI), слияние аккаунтов в Web UI.
 - **[MODEL_CONFIGURATION.md](./MODEL_CONFIGURATION.md)** — где и как настраиваются модели/провайдеры (ASR/diarization/embeddings/LLM) и параметры автопродления.
+- **[OFFLINE_AND_HUGGINGFACE.md](./OFFLINE_AND_HUGGINGFACE.md)** — что скачать с Hugging Face для локального/offline inference (pyannote, ASR, GigaAM), прогрев кэша, `VT_HF_TOKEN`.
+- **[DEPENDENCIES_MIGRATION.md](./DEPENDENCIES_MIGRATION.md)** — план унификации зависимостей сервера (единый `poetry.lock`, **Python 3.12**, torch/pyannote/GigaAM).
+- **[DEPENDENCIES.md](./DEPENDENCIES.md)** — канон версий Python/torch и команды пересборки `poetry.lock`.
 - **[VERSIONING.md](./VERSIONING.md)** — SemVer, [`CHANGELOG.md`](../CHANGELOG.md), синхронизация [`VERSION`](../VERSION).
 - **[ASR_PROVIDER_IMPLEMENTATION.md](./ASR_PROVIDER_IMPLEMENTATION.md)** — план подключения реальных ASR-провайдеров (Phase B, B1.5).
 - **[DIARIZATION_ALIGNMENT_VERSIONING.md](./DIARIZATION_ALIGNMENT_VERSIONING.md)** — дизайн diarization/alignment и схема хранения версий транскриптов (active pointer); `turn_level_retranscription`, Web UI override, `POST …/retranscribe`.
+- **[SPEAKER_IDENTIFICATION.md](./SPEAKER_IDENTIFICATION.md)** — план LLM-идентификации спикеров и переименования (от `SPEAKER_00` к именам в расшифровке и summary).
 - **[PHASE_A_ACCEPTANCE.md](./PHASE_A_ACCEPTANCE.md)** — ручной чеклист приёмки Phase A (в т.ч. загрузка файла и запись с микрофона).
 - **[PHASE_B_ACCEPTANCE.md](./PHASE_B_ACCEPTANCE.md)** — ручной чеклист приёмки Phase B (realtime WS, расширение Chromium, автотесты `browser-extension`).
 - **[PHASE_C_ACCEPTANCE.md](./PHASE_C_ACCEPTANCE.md)** — приёмка блока **C7 + родительский C1**: порядок проверки OAuth/refresh/WS, diarization pipeline, ссылки на автотесты.

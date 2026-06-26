@@ -14,9 +14,12 @@ export interface ExtensionSettings {
   maxConversationMinutes: number;
 }
 
+/** Compile-time default from `VITE_DEFAULT_SERVER_URL`; dev fallback — local Docker API. */
+const DEFAULT_SERVER_URL =
+  import.meta.env.VITE_DEFAULT_SERVER_URL?.trim() || "http://localhost:8002";
+
 const DEFAULT_SETTINGS: ExtensionSettings = {
-  // Docker compose publishes API on 8002 by default (see docker/docker-compose.yml).
-  serverUrl: "http://localhost:8002",
+  serverUrl: DEFAULT_SERVER_URL,
   accessToken: null,
   refreshToken: null,
   audioSource: "microphone",

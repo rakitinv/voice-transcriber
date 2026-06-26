@@ -14,6 +14,10 @@ ENV VITE_PUBLIC_API_BASE_URL=$VITE_PUBLIC_API_BASE_URL
 ARG VITE_ADMIN_WEBUI_SELF_URL=http://localhost:3003
 ENV VITE_ADMIN_WEBUI_SELF_URL=$VITE_ADMIN_WEBUI_SELF_URL
 
+# Public path prefix when the SPA is not at site root (e.g. https://host/admin/). Local compose: `/`.
+ARG VITE_ADMIN_WEBUI_BASE_PATH=/
+ENV VITE_ADMIN_WEBUI_BASE_PATH=$VITE_ADMIN_WEBUI_BASE_PATH
+
 COPY admin-webui/package.json admin-webui/package-lock.json* admin-webui/tsconfig.json admin-webui/vite.config.ts admin-webui/index.html /app/
 COPY admin-webui/src /app/src
 

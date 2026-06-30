@@ -16,6 +16,17 @@ export type ConversationDetailDto = {
   /** Статус строки транскрипта для выбранного tier (§17). */
   transcript_status?: string | null;
   transcript_kind?: string | null;
+  /** §7.6 rolling-summary цепочки записи (null если выключено на сервере). */
+  recording_session_summary_status?: string | null;
+};
+
+/** GET /api/conversations/{id}/session-summary (§7.6) */
+export type RecordingSessionSummaryDto = {
+  recording_session_id: string;
+  status: string;
+  summary_md: string | null;
+  error: string | null;
+  updated_at: string | null;
 };
 
 function authHeaders(settings: ExtensionSettings): Record<string, string> {
@@ -54,7 +65,72 @@ export async function getConversationDetail(
       typeof raw.transcript_kind === "string" || raw.transcript_kind === null
         ? (raw.transcript_kind as string | null)
         : undefined,
+    recording_session_summary_status:
+      typeof raw.recording_session_summary_status === "string" ||
+      raw.recording_session_summary_status === null
+        ? (raw.recording_session_summary_status as string | null)
+        : undefined,
   };
+}
+
+export async function getSessionSummary(
+  settings: ExtensionSettings,
+  conversationId: string
+): Promise<RecordingSessionSummaryDto> {
+  const base = settings.serverUrl.replace(/\/+$/, "");
+  const url = `${base}/api/conversations/${encodeURIComponent(conversationId)}/session-summary`;
+  const res = await fetch(url, { headers: authHeaders(settings) });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`Запрос сводки не удался: ${res.status} ${t.slice(0, 200)}`);
+  }
+  return (await res.json()) as RecordingSessionSummaryDto;
+}
+
+export async function retrySessionSummary(
+  settings: ExtensionSettings,
+  conversationId: string
+): Promise<void> {
+  const base = settings.serverUrl.replace(/\/+$/, "");
+  const url = `${base}/api/conversations/${encodeURIComponent(conversationId)}/session-summary/retry`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: authHeaders(settings),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`Повтор сводки не удался: ${res.status} ${t.slice(0, 200)}`);
+  }
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Ожидает завершения асинхронной сводки (pending/running → success/failed/…). */
+export async function pollSessionSummary(
+  settings: ExtensionSettings,
+  conversationId: string,
+  opts?: {
+    onUpdate?: (data: RecordingSessionSummaryDto) => void;
+    maxAttempts?: number;
+    intervalMs?: number;
+  }
+): Promise<RecordingSessionSummaryDto> {
+  const maxAttempts = opts?.maxAttempts ?? 90;
+  const intervalMs = opts?.intervalMs ?? 2000;
+
+  let data = await getSessionSummary(settings, conversationId);
+  opts?.onUpdate?.(data);
+
+  if (data.status === "pending" || data.status === "running") {
+    for (let i = 0; i < maxAttempts; i++) {
+      await sleep(intervalMs);
+      data = await getSessionSummary(settings, conversationId);
+      opts?.onUpdate?.(data);
+      if (data.status !== "pending" && data.status !== "running") break;
+    }
+  }
+
+  return data;
 }
 
 /** Canonical export (Web UI parity): `GET /api/conversations/{id}/export`. По умолчанию tier=final (ТЗ §17.9). */

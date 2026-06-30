@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import type { ExtensionSettings } from "../settings/storage";
-import { fetchConversationExport, getConversationDetail } from "./conversation";
+import { fetchConversationExport, getConversationDetail, getSessionSummary, retrySessionSummary } from "./conversation";
 
 const baseSettings: ExtensionSettings = {
   serverUrl: "http://api.example/",
@@ -65,5 +65,34 @@ describe("conversation API helpers", () => {
     expect(d.transcript_status).toBe("running");
     const [url] = fetchMock.mock.calls[0] as [string];
     expect(url).toBe("http://api.example/api/conversations/abc?tier=final");
+  });
+
+  it("getSessionSummary GETs session-summary", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        recording_session_id: "rs-1",
+        status: "success",
+        summary_md: "# Summary",
+        error: null,
+        updated_at: "2026-01-01T00:00:00Z",
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const d = await getSessionSummary(baseSettings, "abc");
+    expect(d.summary_md).toBe("# Summary");
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toBe("http://api.example/api/conversations/abc/session-summary");
+  });
+
+  it("retrySessionSummary POSTs session-summary/retry", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await retrySessionSummary(baseSettings, "abc");
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("http://api.example/api/conversations/abc/session-summary/retry");
+    expect(init.method).toBe("POST");
   });
 });

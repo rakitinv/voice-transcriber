@@ -7,8 +7,8 @@ import {
   loadSettings,
   updateSettings,
 } from "../settings/storage";
-import { getConversationDetail, fetchConversationExport } from "../api/conversation";
-import { getUserSettings, type UserSettings } from "../api/settings";
+import { getConversationDetail, fetchConversationExport, getSessionSummary, retrySessionSummary, pollSessionSummary, type RecordingSessionSummaryDto } from "../api/conversation";
+import { getUserSettings, getServerLimits, type UserSettings, type ServerLimits } from "../api/settings";
 import { postUploadAudio } from "../api/upload";
 import { readRecordingSession } from "../recording/sessionPersist";
 import { RECORDING_ACTIVE_KEY, RECORDING_SESSION_KEY } from "../recording/storageKeys";
@@ -85,6 +85,10 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [serverUserSettings, setServerUserSettings] = useState<UserSettings | null>(null);
   const [serverUserSettingsError, setServerUserSettingsError] = useState<string | null>(null);
+  const [serverLimits, setServerLimits] = useState<ServerLimits | null>(null);
+  const [conversationSummaryStatus, setConversationSummaryStatus] = useState<string | null>(null);
+  const [rollingSummary, setRollingSummary] = useState<RecordingSessionSummaryDto | null>(null);
+  const [summaryLoading, setSummaryLoading] = useState(false);
   /** Bumps transcript WebSocket client (manual reconnect, B2.6). */
   const [transcriptWsBootKey, setTranscriptWsBootKey] = useState(0);
   const [offscreenMicActive, setOffscreenMicActive] = useState(false);
@@ -300,6 +304,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
           const finalSnap = await getConversationDetail(cur, cid, { tier: "final" });
           if (!signal.aborted) {
             setFinalExportReady(finalSnap.transcript_status === "success");
+            setConversationSummaryStatus(finalSnap.recording_session_summary_status ?? null);
           }
           const segs = detail.transcript ?? [];
           if (segs.length > 0) {
@@ -422,6 +427,49 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
   }, [settingsOpen, settings?.serverUrl, settings?.accessToken, settings]);
 
   useEffect(() => {
+    if (uiMode !== "recording") return;
+    const token = (settings?.accessToken ?? "").trim();
+    if (!token || sessionOk !== true) {
+      setServerLimits(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const data = await getServerLimits(settings!.serverUrl, token);
+        if (!cancelled) setServerLimits(data);
+      } catch {
+        if (!cancelled) setServerLimits(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [uiMode, sessionOk, settings?.serverUrl, settings?.accessToken, settings]);
+
+  useEffect(() => {
+    setRollingSummary(null);
+    setConversationSummaryStatus(null);
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (!conversationId || !sessionSummaryFeatureOn || conversationSummaryStatus !== "success") return;
+    if (!settings || !(settings.accessToken ?? "").trim()) return;
+    let cancelled = false;
+    void getSessionSummary(settings, conversationId).then(
+      (data) => {
+        if (!cancelled) setRollingSummary(data);
+      },
+      () => {
+        /* retry via button */
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationId, sessionSummaryFeatureOn, conversationSummaryStatus, settings]);
+
+  useEffect(() => {
     if (!conversationId || !(settings?.accessToken ?? "").trim()) {
       setFinalExportReady(false);
       return;
@@ -431,10 +479,17 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
     void (async () => {
       try {
         const cur = await loadSettings();
+        const detail = await getConversationDetail(cur, conversationId);
         const fd = await getConversationDetail(cur, conversationId, { tier: "final" });
-        if (!cancelled) setFinalExportReady(fd.transcript_status === "success");
+        if (!cancelled) {
+          setConversationSummaryStatus(detail.recording_session_summary_status ?? null);
+          setFinalExportReady(fd.transcript_status === "success");
+        }
       } catch {
-        if (!cancelled) setFinalExportReady(false);
+        if (!cancelled) {
+          setConversationSummaryStatus(null);
+          setFinalExportReady(false);
+        }
       }
     })();
     return () => {
@@ -491,6 +546,10 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
     () => transcriptLines.map((l) => l.text).join("\n"),
     [transcriptLines]
   );
+  const hasLiveTranscriptText = transcriptText.trim().length > 0;
+  const sessionSummaryFeatureOn = serverLimits?.llm_session_summary_enabled === true;
+  const canGetSessionSummary =
+    !!conversationId && sessionSummaryFeatureOn && sessionOk === true && !summaryLoading;
 
   const handleStart = async () => {
     if (!settings) return;
@@ -667,6 +726,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
   };
 
   const handleDownloadTranscript = () => {
+    if (!hasLiveTranscriptText) return;
     const blob = new Blob([transcriptText], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -723,6 +783,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
     try {
       const detail = await getConversationDetail(settings, conversationId);
       const finalSnap = await getConversationDetail(settings, conversationId, { tier: "final" });
+      setConversationSummaryStatus(detail.recording_session_summary_status ?? null);
       setFinalExportReady(finalSnap.transcript_status === "success");
       const segs = detail.transcript ?? [];
       if (segs.length) {
@@ -762,10 +823,43 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
     input.click();
   };
 
-  const handleGenerateSummary = () => {
-    // Summary generation is handled by backend (LLM task) once conversation is uploaded.
-    // Here we could call an API endpoint to trigger it; left as a placeholder.
-    alert("Генерация сводки запускается на сервере (во всплывающем окне не реализовано).");
+  const handleGetSessionSummary = async () => {
+    if (!settings || !conversationId || !sessionSummaryFeatureOn) return;
+    setError(null);
+    setUploadInfo(null);
+    const ok = await refreshSession(settings);
+    if (!ok) return;
+    setSummaryLoading(true);
+    try {
+      let data = await getSessionSummary(settings, conversationId);
+      if (data.status === "failed") {
+        try {
+          await retrySessionSummary(settings, conversationId);
+          setUploadInfo("Пересчёт сводки поставлен в очередь. Подождите несколько секунд…");
+        } catch {
+          setError("Не удалось поставить сводку в очередь (LLM недоступен или отключён).");
+          setRollingSummary(data);
+          return;
+        }
+        for (let i = 0; i < 90; i++) {
+          await new Promise<void>((r) => setTimeout(r, 2000));
+          data = await getSessionSummary(settings, conversationId);
+          setRollingSummary(data);
+          if (data.status === "success" || data.status === "failed") break;
+        }
+      } else {
+        setRollingSummary(data);
+        if (data.status === "pending" || data.status === "running") {
+          data = await pollSessionSummary(settings, conversationId, { onUpdate: setRollingSummary });
+        }
+      }
+      setRollingSummary(data);
+      setConversationSummaryStatus(data.status);
+    } catch {
+      setError("Не удалось загрузить сводку сессии.");
+    } finally {
+      setSummaryLoading(false);
+    }
   };
 
   const updateLocalSettings = async (partial: Partial<ExtensionSettings>) => {
@@ -1089,7 +1183,12 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
           <button
             type="button"
             onClick={handleDownloadTranscript}
-            title="Сохранить текущий текст из живого потока (fast) на диск; это не канонический финальный экспорт."
+            disabled={!hasLiveTranscriptText}
+            title={
+              hasLiveTranscriptText
+                ? "Сохранить текущий текст из живого потока (fast) на диск; это не канонический финальный экспорт."
+                : "Нет текста для сохранения — дождитесь partial/final или обновите с сервера."
+            }
             style={{ flex: "1 1 120px", minWidth: 0 }}
           >
             Сохранить живой текст
@@ -1141,9 +1240,61 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
             Переподключить расшифровку
           </button>
         </div>
-        <button type="button" onClick={handleGenerateSummary} style={{ width: "100%" }}>
-          Сгенерировать сводку
+        <button
+          type="button"
+          onClick={() => void handleGetSessionSummary()}
+          disabled={!canGetSessionSummary}
+          title={
+            !conversationId
+              ? undefined
+              : !sessionSummaryFeatureOn
+                ? "Отключено на сервере (llm.session_summary_enabled). См. Web UI → Настройки → Ограничения сервера."
+                : "Загрузить или обновить скользящую сводку сессии записи. Формируется после конвейера расшифровки (ASR, затем диаризация при включении)."
+          }
+          style={{ width: "100%" }}
+        >
+          {summaryLoading ? "Загрузка…" : "Получить сводку"}
         </button>
+        {sessionSummaryFeatureOn && conversationId ? (
+          <div
+            style={{
+              border: "1px solid #ddd",
+              borderRadius: 4,
+              padding: 8,
+              fontSize: 12,
+              maxHeight: 160,
+              overflowY: "auto",
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            <div style={{ marginBottom: 4, color: "#555" }}>
+              Скользящая сводка (сессия записи)
+              {rollingSummary?.status ? (
+                <>
+                  {" "}
+                  · статус: <strong>{rollingSummary.status}</strong>
+                </>
+              ) : conversationSummaryStatus ? (
+                <>
+                  {" "}
+                  · статус: <strong>{conversationSummaryStatus}</strong>
+                </>
+              ) : null}
+            </div>
+            {rollingSummary?.status === "failed" && rollingSummary.error ? (
+              <div style={{ color: "red", marginBottom: 4 }}>{rollingSummary.error}</div>
+            ) : null}
+            {rollingSummary?.summary_md ? (
+              rollingSummary.summary_md
+            ) : rollingSummary?.status === "success" && !rollingSummary.summary_md ? (
+              <span style={{ color: "#777" }}>Текст сводки пуст.</span>
+            ) : (
+              <span style={{ color: "#777" }}>
+                Нажмите «Получить сводку», чтобы загрузить Markdown с сервера.
+              </span>
+            )}
+          </div>
+        ) : null}
         <div
           style={{
             border: "1px solid #ccc",

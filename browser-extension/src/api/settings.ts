@@ -1,3 +1,23 @@
+/** GET /api/settings/limits — поля, нужные расширению. */
+export interface ServerLimits {
+  llm_session_summary_enabled?: boolean;
+}
+
+export async function getServerLimits(
+  serverUrl: string,
+  accessToken: string
+): Promise<ServerLimits> {
+  const base = serverUrl.replace(/\/+$/, "");
+  const res = await fetch(`${base}/api/settings/limits`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Не удалось загрузить лимиты: ${res.status} ${text}`.trim());
+  }
+  return (await res.json()) as ServerLimits;
+}
+
 export interface UserSettings {
   default_language: string;
   default_ttl_days: number;

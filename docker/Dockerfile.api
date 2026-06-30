@@ -24,6 +24,7 @@ RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     ffmpeg \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy project files
@@ -60,5 +61,13 @@ FROM base AS runtime
 RUN --mount=type=cache,target=/root/.cache/pip,id=vt-api-pip \
     --mount=type=cache,target=/root/.cache/pypoetry,id=vt-api-pypoetry \
     poetry install --only main --no-interaction --no-ansi --no-root
+# faster-whisper (ctranslate2) on CUDA needs pip NVIDIA libs + LD_LIBRARY_PATH (see ml-base-cuda).
+RUN --mount=type=cache,target=/root/.cache/pip,id=vt-api-pip \
+    pip install \
+    "nvidia-cublas-cu12" \
+    "nvidia-cuda-runtime-cu12" \
+    "nvidia-cuda-nvrtc-cu12" \
+    "nvidia-cudnn-cu12"
+ENV LD_LIBRARY_PATH="/usr/local/lib/python3.12/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:/usr/local/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib:/usr/local/lib/python3.12/site-packages/nvidia/cudnn/lib:${LD_LIBRARY_PATH}"
 EXPOSE 8000
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

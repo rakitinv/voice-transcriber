@@ -10,6 +10,7 @@ from core.logging import logger
 
 from .llm_base import (
     LLMProvider,
+    build_speaker_identify_prompt,
     strip_llm_thinking_artifacts,
     summary_language_prompt_label,
     summary_system_prompt,
@@ -98,6 +99,22 @@ class OpenAIChatLLMProvider(LLMProvider):
                 "Summary:"
             )
         return self._chat(system=summary_system_prompt(output_language), user=user_prompt)
+
+    def suggest_speaker_names(
+        self,
+        speaker_excerpts,
+        *,
+        output_language: str | None = None,
+    ) -> str:
+        code = (output_language or "ru").strip().lower()
+        if code == "ru":
+            system = (
+                "Ты помощник для идентификации спикеров. Отвечай только валидным JSON."
+            )
+        else:
+            system = "You identify speakers. Reply with valid JSON only."
+        user = build_speaker_identify_prompt(speaker_excerpts, output_language=code)
+        return strip_llm_thinking_artifacts(self._chat(system=system, user=user))
 
     def _chat(self, *, system: str, user: str) -> str:
         raw_base = self.config.get("base_url") or "http://127.0.0.1:8000/v1"

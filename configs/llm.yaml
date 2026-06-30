@@ -5,6 +5,14 @@
 session_summary_enabled: true
 session_summary_max_input_chars: 120000
 
+# C1.4: LLM-предложения имён спикеров после диаризации (SPEAKER_IDENTIFICATION.md)
+speaker_identification:
+  enabled: false
+  mode: suggest          # suggest | auto_apply | off
+  auto_apply_min_confidence: 0.8
+  max_input_chars_per_speaker: 2000
+  max_speakers: 8
+
 # ollama | vllm | openai (vLLM и LM Studio — OpenAI-compatible /v1/chat/completions)
 default_provider: ollama
 

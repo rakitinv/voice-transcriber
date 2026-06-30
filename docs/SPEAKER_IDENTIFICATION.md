@@ -4,7 +4,7 @@
 
 **Связанные документы:** [DIARIZATION_ALIGNMENT_VERSIONING.md](./DIARIZATION_ALIGNMENT_VERSIONING.md), [TECHNICAL_SPECIFICATION.md](./TECHNICAL_SPECIFICATION.md), [MODEL_CONFIGURATION.md](./MODEL_CONFIGURATION.md), [ROADMAP.md](./ROADMAP.md).
 
-**Статус:** запланировано (не реализовано).
+**Статус:** реализовано (C1.4, 2026-06-30).
 
 ---
 
@@ -206,33 +206,33 @@ Export `md`/`json`: отображаемые имена; в JSON `_meta.speaker_
 
 ### Фаза S1 — Ручное переименование (MVP)
 
-- [ ] Alembic: `conversations.speaker_labels`
-- [ ] `speaker_id` в сегментах при записи diarization (сохранять pyannote label в `speaker_id`, `speaker` = display)
-- [ ] `core/speaker_labels.py`: apply + rebuild md
-- [ ] `GET/PATCH …/speakers`, OpenAPI
-- [ ] Web UI: панель спикеров + inline rename
-- [ ] Export и GET conversation с display names
-- [ ] Unit-тесты: apply labels, export md
+- [x] Alembic: `conversations.speaker_labels`
+- [x] `speaker_id` в сегментах при записи diarization (сохранять pyannote label в `speaker_id`, `speaker` = display)
+- [x] `core/speaker_labels.py`: apply + rebuild md
+- [x] `GET/PATCH …/speakers`, OpenAPI
+- [x] Web UI: панель спикеров + inline rename
+- [x] Export и GET conversation с display names
+- [x] Unit-тесты: apply labels, export md
 
 **Приёмка:** после diarization пользователь переименовывает `SPEAKER_00` → «Иван»; в расшифровке и MD-экспорте везде «Иван».
 
 ### Фаза S2 — LLM-предложения имён
 
-- [ ] `configs/llm.yaml`: блок `speaker_identification`
-- [ ] Celery `identify_speakers`, провайдерный метод `suggest_speaker_names` в `LLMProvider`
-- [ ] Цепочка после diarization; `POST …/identify`, `POST …/apply-suggestions`
-- [ ] UI: баннер предложений, confidence, evidence
-- [ ] Тесты с мок LLM
+- [x] `configs/llm.yaml`: блок `speaker_identification`
+- [x] Celery `identify_speakers`, провайдерный метод `suggest_speaker_names` в `LLMProvider`
+- [x] Цепочка после diarization; `POST …/identify`, `POST …/apply-suggestions`
+- [x] UI: баннер предложений, confidence, evidence
+- [x] Тесты с мок LLM
 
 **Приёмка:** на записи с фразой «меня зовут …» LLM предлагает имя; пользователь принимает — отображение обновляется без rerun diarization.
 
 ### Фаза S3 — Summary, авто-режим, полировка
 
-- [ ] Summary после identify / обновление промпта с секцией «Участники»
-- [ ] Режим `auto_apply` + threshold
-- [ ] Переиндексация embeddings при rename
+- [x] Summary после identify / обновление промпта с секцией «Участники»
+- [x] Режим `auto_apply` + threshold
+- [x] Переиндексация embeddings при rename
 - [ ] Документация `MODEL_CONFIGURATION.md`, env example
-- [ ] Чеклист приёмки в `PHASE_C_ACCEPTANCE.md` или `SPEAKER_IDENTIFICATION_ACCEPTANCE.md`
+- [x] Чеклист приёмки в `PHASE_C_ACCEPTANCE.md` или `SPEAKER_IDENTIFICATION_ACCEPTANCE.md`
 
 ---
 

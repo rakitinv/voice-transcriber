@@ -103,12 +103,16 @@ services:
       VT_WS_REQUIRE_SUBPROTOCOL: ${VT_WS_REQUIRE_SUBPROTOCOL:-}
       # Опционально: единый секрет JWT для API/воркера/CLI (см. server/core/security.py). Иначе — из configs/server.yaml (Google client_secret).
       VT_JWT_SECRET: ${VT_JWT_SECRET:-}
-      # ASR quality tuning (faster-whisper) — realtime tier on API
+      # Realtime ASR (faster-whisper) in API — device separate from GPU workers (VT_ASR_DEVICE=cuda for GigaAM).
+      # Default cpu: API image is slim CPU; set VT_ASR_REALTIME_DEVICE=cuda only with NVIDIA runtime + CUDA API/ml image.
       VT_ASR_REALTIME_PROVIDER: ${VT_ASR_REALTIME_PROVIDER:-}
       VT_ASR_REALTIME_MODEL: ${VT_ASR_REALTIME_MODEL:-}
       VT_ASR_MODEL: ${VT_ASR_MODEL:-medium}
-      VT_ASR_DEVICE: ${VT_ASR_DEVICE:-cpu}
-      VT_ASR_COMPUTE_TYPE: ${VT_ASR_COMPUTE_TYPE:-int8}
+      VT_ASR_REALTIME_DEVICE: ${VT_ASR_REALTIME_DEVICE:-cpu}
+      VT_ASR_DEVICE: ${VT_ASR_REALTIME_DEVICE:-cpu}
+      VT_ASR_COMPUTE_TYPE: ${VT_ASR_REALTIME_COMPUTE_TYPE:-int8}
+      # ctranslate2 CUDA (VT_ASR_REALTIME_DEVICE=cuda): pip nvidia-* in Dockerfile.api + loader path
+      LD_LIBRARY_PATH: "/usr/local/lib/python3.12/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:/usr/local/lib/python3.12/site-packages/nvidia/cuda_nvrtc/lib:/usr/local/lib/python3.12/site-packages/nvidia/cudnn/lib"
       VT_ASR_BEAM_SIZE: ${VT_ASR_BEAM_SIZE:-10}
       VT_ASR_VAD_FILTER: ${VT_ASR_VAD_FILTER:-1}
       VT_ASR_VAD_MIN_SILENCE_MS: ${VT_ASR_VAD_MIN_SILENCE_MS:-400}
@@ -456,6 +460,8 @@ services:
       VT_ASR_FINAL_MODEL: ${VT_ASR_FINAL_MODEL:-}
       VT_ASR_DEVICE: ${VT_ASR_DEVICE:-${VT_DIARIZATION_ASR_DEVICE:-cuda}}
       VT_ASR_COMPUTE_TYPE: ${VT_ASR_COMPUTE_TYPE:-${VT_DIARIZATION_ASR_COMPUTE_TYPE:-float16}}
+      # GigaAM HF + fp16 STFT: cuFFT needs power-of-two sizes; keep encoder fp32 on GPU.
+      VT_GIGAAM_FP16_ENCODER: ${VT_GIGAAM_FP16_ENCODER:-0}
       VT_ASR_MODEL: ${VT_ASR_MODEL:-medium}
       VT_GIGAAM_LONGFORM: ${VT_GIGAAM_LONGFORM:-1}
       VT_HF_TOKEN: ${VT_HF_TOKEN:-}
@@ -669,6 +675,8 @@ services:
       VT_ASR_FINAL_MODEL: ${VT_ASR_FINAL_MODEL:-}
       VT_ASR_DEVICE: ${VT_ASR_DEVICE:-${VT_DIARIZATION_ASR_DEVICE:-cuda}}
       VT_ASR_COMPUTE_TYPE: ${VT_ASR_COMPUTE_TYPE:-${VT_DIARIZATION_ASR_COMPUTE_TYPE:-float16}}
+      # GigaAM HF + fp16 STFT: cuFFT needs power-of-two sizes; keep encoder fp32 on GPU.
+      VT_GIGAAM_FP16_ENCODER: ${VT_GIGAAM_FP16_ENCODER:-0}
       VT_ASR_MODEL: ${VT_ASR_MODEL:-${VT_DIARIZATION_ASR_MODEL:-medium}}
       VT_GIGAAM_LONGFORM: ${VT_GIGAAM_LONGFORM:-1}
       VT_ASR_BEAM_SIZE: ${VT_ASR_BEAM_SIZE:-10}

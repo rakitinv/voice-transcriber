@@ -6,6 +6,7 @@
 - **[OPENAPI.md](./OPENAPI.md)** — как проверять [`../openapi.yaml`](../openapi.yaml).
 - **[TESTING.md](./TESTING.md)** — pytest e2e Phase A (A3.2), переменные `VT_E2E_*`.
 - **[WEBSOCKET.md](./WEBSOCKET.md)** — контракт WebSocket (Phase B): `/ws/audio`, `/ws/transcript`, JWT.
+- **[REALTIME_FAST_FINAL_V2.md](./REALTIME_FAST_FINAL_V2.md)** — ТЗ доработки realtime: windowed, persist fast, finalize в расширении, fast/final в Web UI (дополняет ТЗ §17).
 - **[BROWSER_EXTENSION_UI.md](./BROWSER_EXTENSION_UI.md)** — соглашения по UI расширения (Side Panel, popup, контекстное меню, persist состояния).
 - **[AUTH_AND_IDENTITY.md](./AUTH_AND_IDENTITY.md)** — OAuth, идентичность, сессия сервиса (расширение + Web UI), слияние аккаунтов в Web UI.
 - **[MODEL_CONFIGURATION.md](./MODEL_CONFIGURATION.md)** — где и как настраиваются модели/провайдеры (ASR/diarization/embeddings/LLM) и параметры автопродления.

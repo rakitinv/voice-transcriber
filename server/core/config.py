@@ -158,12 +158,24 @@ class ASRConfig:
 
 
 @dataclass
+class SpeakerIdentificationConfig:
+    enabled: bool = False
+    mode: str = "suggest"  # suggest | auto_apply | off
+    auto_apply_min_confidence: float = 0.8
+    max_input_chars_per_speaker: int = 2000
+    max_speakers: int = 8
+
+
+@dataclass
 class LLMConfig:
     default_provider: str
     providers: Dict[str, LLMProviderConfig]
     # ТЗ §7.6: один rolling-summary на всю цепочку (recording_session_id).
     session_summary_enabled: bool = False
     session_summary_max_input_chars: int = 120_000
+    speaker_identification: SpeakerIdentificationConfig = field(
+        default_factory=SpeakerIdentificationConfig
+    )
 
 
 @dataclass
@@ -409,12 +421,57 @@ def _embeddings_config_from_yaml(embeddings_data: Dict[str, Any]) -> EmbeddingsC
     )
 
 
+def _speaker_identification_from_yaml(block: Any) -> SpeakerIdentificationConfig:
+    if not isinstance(block, dict):
+        return SpeakerIdentificationConfig()
+    try:
+        conf = float(block.get("auto_apply_min_confidence", 0.8))
+    except (TypeError, ValueError):
+        conf = 0.8
+    try:
+        max_chars = int(block.get("max_input_chars_per_speaker", 2000) or 2000)
+    except (TypeError, ValueError):
+        max_chars = 2000
+    try:
+        max_sp = int(block.get("max_speakers", 8) or 8)
+    except (TypeError, ValueError):
+        max_sp = 8
+    mode = str(block.get("mode", "suggest") or "suggest").strip().lower()
+    if mode not in ("suggest", "auto_apply", "off"):
+        mode = "suggest"
+    return SpeakerIdentificationConfig(
+        enabled=bool(block.get("enabled", False)),
+        mode=mode,
+        auto_apply_min_confidence=max(0.0, min(1.0, conf)),
+        max_input_chars_per_speaker=max(256, max_chars),
+        max_speakers=max(1, max_sp),
+    )
+
+
 def _apply_llm_env_overrides(llm_data: Dict[str, Any]) -> None:
     v = os.environ.get("VT_LLM_SESSION_SUMMARY_ENABLED", "").strip().lower()
     if v in ("1", "true", "yes"):
         llm_data["session_summary_enabled"] = True
     elif v in ("0", "false", "no"):
         llm_data["session_summary_enabled"] = False
+    si = llm_data.get("speaker_identification")
+    if not isinstance(si, dict):
+        si = {}
+        llm_data["speaker_identification"] = si
+    si_en = os.environ.get("VT_SPEAKER_IDENTIFICATION_ENABLED", "").strip().lower()
+    if si_en in ("1", "true", "yes"):
+        si["enabled"] = True
+    elif si_en in ("0", "false", "no"):
+        si["enabled"] = False
+    si_mode = (os.environ.get("VT_SPEAKER_IDENTIFICATION_MODE") or "").strip().lower()
+    if si_mode in ("suggest", "auto_apply", "off"):
+        si["mode"] = si_mode
+    si_thr = (os.environ.get("VT_SPEAKER_IDENTIFICATION_AUTO_APPLY_MIN_CONFIDENCE") or "").strip()
+    if si_thr:
+        try:
+            si["auto_apply_min_confidence"] = float(si_thr)
+        except ValueError:
+            pass
     mc = os.environ.get("VT_LLM_SESSION_SUMMARY_MAX_INPUT_CHARS", "").strip()
     if mc.isdigit():
         llm_data["session_summary_max_input_chars"] = int(mc)
@@ -628,6 +685,9 @@ def load_app_config() -> ServerConfig:
         session_summary_enabled=bool(llm_data.get("session_summary_enabled", False)),
         session_summary_max_input_chars=int(
             llm_data.get("session_summary_max_input_chars", 120_000) or 120_000
+        ),
+        speaker_identification=_speaker_identification_from_yaml(
+            llm_data.get("speaker_identification")
         ),
     )
 

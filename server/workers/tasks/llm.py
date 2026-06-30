@@ -1,5 +1,6 @@
 """
 LLM summary generation tasks (per-conversation S3 + §7.6 recording_session chain).
+Speaker identification after diarization (C1.4).
 """
 
 from __future__ import annotations
@@ -7,6 +8,11 @@ from __future__ import annotations
 from uuid import UUID
 
 from app.models import Conversation, RecordingSessionSummary, Transcript, User
+from app.services.speaker_display import (
+    active_diarized_transcript,
+    merge_speaker_label_maps,
+    persist_labels_on_transcript,
+)
 from app.services.summary_pipeline_events import record_summary_pipeline_events
 
 from ..celery_app import celery_app
@@ -16,7 +22,40 @@ from core.logging import logger
 from core.user_language import llm_summary_output_language
 from core.recording_session_chain import ordered_chain_segments
 from core.s3 import storage
+from core.speaker_labels import (
+    applied_llm_entry,
+    collect_speaker_ids,
+    llm_suggestion_entry,
+    parse_speaker_identify_json,
+    participants_summary_block,
+)
 from plugins.loader import plugin_registry
+
+
+def schedule_post_diarization_pipeline(
+    user_id: str, conversation_id: str, recording_session_id: str
+) -> None:
+    """After diarization: optional speaker identify, then rolling session summary."""
+    cfg = app_config.llm.speaker_identification
+    if cfg.enabled and cfg.mode != "off" and plugin_registry.get_llm_provider() is not None:
+        celery_app.send_task(
+            "workers.tasks.llm.identify_speakers",
+            args=[user_id, conversation_id, recording_session_id],
+            queue="llm",
+        )
+        return
+    schedule_recording_session_summary(user_id, recording_session_id)
+
+
+def schedule_speaker_identification(user_id: str, conversation_id: str) -> None:
+    with session_scope() as db:
+        conv = db.query(Conversation).filter(Conversation.id == UUID(conversation_id)).first()
+        rsid = str(conv.recording_session_id) if conv else conversation_id
+    celery_app.send_task(
+        "workers.tasks.llm.identify_speakers",
+        args=[user_id, conversation_id, rsid],
+        queue="llm",
+    )
 
 
 def schedule_recording_session_summary(user_id: str, recording_session_id: str) -> None:
@@ -95,12 +134,192 @@ def _bundle_chain_markdown(
         if not md:
             continue
         ids_included.append(str(conv.id))
-        parts.append(f"## Segment {idx} (`{conv.id}`)\n\n{md}")
+        participants = participants_summary_block(
+            conv.speaker_labels if isinstance(conv.speaker_labels, dict) else None
+        )
+        body = f"{participants}{md}" if participants else md
+        parts.append(f"## Segment {idx} (`{conv.id}`)\n\n{body}")
 
     bundle = "\n\n".join(parts) if parts else ""
     if len(bundle) > max_chars:
         bundle = bundle[: max_chars - 80] + "\n\n… *[truncated by session_summary_max_input_chars]*\n"
     return bundle, ids_included
+
+
+def _sample_speaker_excerpts(
+    segments: list[dict],
+    *,
+    max_chars_per_speaker: int,
+    max_speakers: int,
+) -> dict[str, str]:
+    from core.speaker_labels import resolve_speaker_id
+
+    by_speaker: dict[str, list[dict]] = {}
+    for seg in segments:
+        if not isinstance(seg, dict):
+            continue
+        sid = resolve_speaker_id(seg)
+        by_speaker.setdefault(sid, []).append(seg)
+
+    speaker_ids = list(by_speaker.keys())[:max_speakers]
+    out: dict[str, str] = {}
+    for sid in speaker_ids:
+        segs = by_speaker[sid]
+        if len(segs) <= 5:
+            picks = segs
+        else:
+            picks = []
+            for idx in (
+                0,
+                len(segs) // 4,
+                len(segs) // 2,
+                (3 * len(segs)) // 4,
+                len(segs) - 1,
+            ):
+                if segs[idx] not in picks:
+                    picks.append(segs[idx])
+        lines: list[str] = []
+        total = 0
+        for seg in picks:
+            text = str(seg.get("text", "")).strip()
+            if not text:
+                continue
+            line = f"[{float(seg.get('start', 0)):.1f}s] {text}"
+            if total + len(line) > max_chars_per_speaker:
+                break
+            lines.append(line)
+            total += len(line)
+        out[sid] = "\n".join(lines)
+    return out
+
+
+@celery_app.task(name="workers.tasks.llm.identify_speakers", bind=True)
+def identify_speakers(
+    self, user_id: str, conversation_id: str, recording_session_id: str
+) -> dict:
+    """LLM suggests display names for diarized speaker_ids (C1.4)."""
+    cfg = app_config.llm.speaker_identification
+    uid = UUID(user_id)
+    cid = UUID(conversation_id)
+
+    if not cfg.enabled or cfg.mode == "off":
+        schedule_recording_session_summary(user_id, recording_session_id)
+        return {"status": "skipped", "reason": "disabled"}
+
+    provider = plugin_registry.get_llm_provider()
+    if provider is None:
+        with session_scope() as db:
+            conv = db.query(Conversation).filter(Conversation.id == cid).first()
+            if conv is not None:
+                conv.speaker_identification_status = "skipped"
+        schedule_recording_session_summary(user_id, recording_session_id)
+        return {"status": "skipped", "reason": "no_provider"}
+
+    try:
+        with session_scope() as db:
+            conv = (
+                db.query(Conversation)
+                .filter(Conversation.id == cid, Conversation.user_id == uid)
+                .first()
+            )
+            if conv is None:
+                return {"status": "failed", "error": "conversation_not_found"}
+            conv.speaker_identification_status = "running"
+            row = active_diarized_transcript(db, conv)
+            if row is None:
+                conv.speaker_identification_status = "failed"
+                return {"status": "failed", "error": "no_diarized_transcript"}
+            segments = [
+                s
+                for s in (row.transcript_json or {}).get("segments") or []
+                if isinstance(s, dict)
+            ]
+            if len(collect_speaker_ids(segments)) < 2:
+                conv.speaker_identification_status = "skipped"
+                schedule_recording_session_summary(user_id, recording_session_id)
+                return {"status": "skipped", "reason": "single_speaker"}
+
+            user_row = db.query(User).filter(User.id == uid).first()
+            lang = llm_summary_output_language(user_row.preferences) if user_row else "ru"
+            excerpts = _sample_speaker_excerpts(
+                segments,
+                max_chars_per_speaker=cfg.max_input_chars_per_speaker,
+                max_speakers=cfg.max_speakers,
+            )
+
+        result = provider.suggest_speaker_names(excerpts, output_language=lang)
+        parsed = parse_speaker_identify_json(result)
+        suggestions = parsed.get("speakers") or []
+        if not isinstance(suggestions, list):
+            suggestions = []
+
+        updates: dict[str, dict] = {}
+        threshold = float(cfg.auto_apply_min_confidence)
+        auto_mode = cfg.mode == "auto_apply"
+
+        for item in suggestions:
+            if not isinstance(item, dict):
+                continue
+            sid = str(item.get("speaker_id") or "").strip()
+            if not sid:
+                continue
+            suggested = item.get("suggested_name")
+            suggested_s = str(suggested).strip() if suggested is not None else None
+            if suggested_s == "":
+                suggested_s = None
+            role = item.get("role")
+            role_s = str(role).strip() if isinstance(role, str) and role.strip() else None
+            conf_raw = item.get("confidence")
+            confidence = float(conf_raw) if conf_raw is not None else None
+            evidence = item.get("evidence")
+            evidence_s = (
+                str(evidence).strip() if isinstance(evidence, str) and evidence.strip() else None
+            )
+
+            if auto_mode and suggested_s and confidence is not None and confidence >= threshold:
+                updates[sid] = applied_llm_entry(
+                    suggested_s,
+                    role=role_s,
+                    confidence=confidence,
+                    source="llm_auto",
+                )
+            elif suggested_s:
+                updates[sid] = llm_suggestion_entry(
+                    suggested_name=suggested_s,
+                    role=role_s,
+                    confidence=confidence,
+                    evidence=evidence_s,
+                )
+
+        with session_scope() as db:
+            conv = (
+                db.query(Conversation)
+                .filter(Conversation.id == cid, Conversation.user_id == uid)
+                .first()
+            )
+            if conv is None:
+                return {"status": "failed", "error": "conversation_not_found"}
+            if updates:
+                conv.speaker_labels = merge_speaker_label_maps(conv.speaker_labels, updates)
+            conv.speaker_identification_status = "success" if updates else "skipped"
+            row = active_diarized_transcript(db, conv)
+            if row is not None and any(
+                isinstance(v, dict) and v.get("source") == "llm_auto" for v in updates.values()
+            ):
+                persist_labels_on_transcript(db, conv, row, reindex_embedding=True)
+
+        schedule_recording_session_summary(user_id, recording_session_id)
+        return {"status": "success", "suggestions": len(updates)}
+
+    except Exception as e:
+        err = str(e)[:2000]
+        logger.error("identify_speakers failed conversation=%s: %s", conversation_id, err)
+        with session_scope() as db:
+            conv = db.query(Conversation).filter(Conversation.id == cid).first()
+            if conv is not None:
+                conv.speaker_identification_status = "failed"
+        schedule_recording_session_summary(user_id, recording_session_id)
+        raise
 
 
 @celery_app.task(name="workers.tasks.llm.summarize_recording_session", bind=True)

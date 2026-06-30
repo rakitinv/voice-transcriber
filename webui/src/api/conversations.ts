@@ -18,6 +18,8 @@ import type {
   RecordingSessionSummaryDto,
   SearchResponseDto,
   ServerLimits,
+  SpeakerLabelEntry,
+  SpeakersState,
   UserSettings,
 } from "../types";
 
@@ -160,6 +162,7 @@ interface ConversationDetailPayload {
   language: string;
   transcript: Array<{
     speaker: string;
+    speaker_id?: string | null;
     start: number;
     end: number;
     text: string;
@@ -182,6 +185,9 @@ interface ConversationDetailPayload {
   refetch_recommended?: boolean;
   /** Rare: if a proxy or serializer ever emits camelCase */
   refetchRecommended?: boolean;
+  speaker_labels?: Record<string, SpeakerLabelEntry>;
+  speaker_identification_status?: string | null;
+  speaker_identification_enabled?: boolean;
 }
 
 export const conversationsApi = {
@@ -214,7 +220,13 @@ export const conversationsApi = {
         date: d.created_at,
         duration: d.duration_seconds,
         language: d.language,
-        transcript: d.transcript ?? [],
+        transcript: (d.transcript ?? []).map((seg) => ({
+          speaker: seg.speaker,
+          speaker_id: seg.speaker_id ?? undefined,
+          start: seg.start,
+          end: seg.end,
+          text: seg.text,
+        })),
         summary: d.summary ?? undefined,
         audioObjectExt: d.audio_object_ext,
         audioUploadedAt: d.audio_uploaded_at ?? null,
@@ -233,6 +245,9 @@ export const conversationsApi = {
         refetchRecommended,
         recordingSessionSummaryStatus: d.recording_session_summary_status ?? null,
         recordingSessionSummaryUpdatedAt: d.recording_session_summary_updated_at ?? null,
+        speakerLabels: d.speaker_labels ?? {},
+        speakerIdentificationStatus: d.speaker_identification_status ?? null,
+        speakerIdentificationEnabled: d.speaker_identification_enabled === true,
       };
       return conv;
     }),
@@ -339,6 +354,42 @@ export const conversationsApi = {
   retrySessionSummary: async (id: string) => {
     await api.post(`/conversations/${id}/session-summary/retry`);
   },
+
+  getSpeakers: (id: string) =>
+    api.get<SpeakersState>(`/conversations/${id}/speakers`).then((r) => ({
+      speaker_labels: r.data.speaker_labels ?? {},
+      speaker_ids: r.data.speaker_ids ?? [],
+      speaker_identification_status: r.data.speaker_identification_status ?? null,
+      speaker_identification_enabled: r.data.speaker_identification_enabled === true,
+    })),
+
+  patchSpeakers: (
+    id: string,
+    speakers: Array<{ speaker_id: string; display_name: string }>
+  ) =>
+    api
+      .patch<SpeakersState>(`/conversations/${id}/speakers`, { speakers })
+      .then((r) => ({
+        speaker_labels: r.data.speaker_labels ?? {},
+        speaker_ids: r.data.speaker_ids ?? [],
+        speaker_identification_status: r.data.speaker_identification_status ?? null,
+        speaker_identification_enabled: r.data.speaker_identification_enabled === true,
+      })),
+
+  identifySpeakers: (id: string) =>
+    api.post(`/conversations/${id}/speakers/identify`),
+
+  applySpeakerSuggestions: (id: string, speakerIds?: string[]) =>
+    api
+      .post<SpeakersState>(`/conversations/${id}/speakers/apply-suggestions`, {
+        speaker_ids: speakerIds ?? null,
+      })
+      .then((r) => ({
+        speaker_labels: r.data.speaker_labels ?? {},
+        speaker_ids: r.data.speaker_ids ?? [],
+        speaker_identification_status: r.data.speaker_identification_status ?? null,
+        speaker_identification_enabled: r.data.speaker_identification_enabled === true,
+      })),
 
   retranscribe: async (id: string) => {
     try {

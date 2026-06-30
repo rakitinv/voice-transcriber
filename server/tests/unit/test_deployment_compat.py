@@ -61,3 +61,45 @@ def test_diarization_enabled_without_consumer_warns(monkeypatch: pytest.MonkeyPa
 def test_deploy_profile_defaults_cpu(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("VT_DEPLOY_PROFILE", raising=False)
     assert deploy_profile() == "cpu"
+
+
+def test_gigaam_final_on_gpu_unified_skips_local_import_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VT_DEPLOY_PROFILE", "gpu-unified")
+    with (
+        patch("core.deployment_compat.app_config") as cfg,
+        patch("core.deployment_compat.gigaam_importable", return_value=False),
+    ):
+        cfg.asr.realtime_provider = "whisper"
+        cfg.asr.final_provider = "gigaam"
+        cfg.asr.default_provider = "whisper"
+        cfg.asr.providers = {}
+        cfg.diarization.enabled = False
+        issues = collect_compatibility_issues(
+            celery_queues=[
+                QueueConsumerSlice("asr_final", True),
+                QueueConsumerSlice("asr_fast", True),
+            ],
+        )
+    assert not any(i.code == "gigaam_package_missing" for i in issues)
+
+
+def test_gigaam_final_on_gpu_without_consumer_still_reports_package_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VT_DEPLOY_PROFILE", "gpu")
+    with (
+        patch("core.deployment_compat.app_config") as cfg,
+        patch("core.deployment_compat.gigaam_importable", return_value=False),
+    ):
+        cfg.asr.realtime_provider = "whisper"
+        cfg.asr.final_provider = "gigaam"
+        cfg.asr.default_provider = "whisper"
+        cfg.asr.providers = {}
+        cfg.diarization.enabled = False
+        issues = collect_compatibility_issues(
+            celery_queues=[QueueConsumerSlice("asr_final", False)],
+        )
+    assert any(i.code == "gigaam_package_missing" for i in issues)
+    assert any(i.code == "asr_final_no_consumer" for i in issues)

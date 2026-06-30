@@ -59,6 +59,12 @@ RUN --mount=type=cache,target=/root/.cache/pip,id=vt-ml-base-pip \
     python /tmp/strip_torch_cuda.py /tmp/gigaam-req.txt /tmp/gigaam-req-no-torch.txt && \
     pip-retry.sh install -r /tmp/gigaam-req-no-torch.txt
 
+# GigaAM-v3 (ai-sage/GigaAM-v3) requires transformers 4.57.x; 5.x breaks FeatureExtractor (meta device).
+# transformers 4.57 needs huggingface-hub<1.0; pyannote accepts >=0.28.1 so 0.36.x is fine in this image.
+RUN --mount=type=cache,target=/root/.cache/pip,id=vt-ml-base-pip \
+    pip-retry.sh install "transformers==4.57.1" "huggingface-hub>=0.34,<1.0" "torchcodec==0.10" && \
+    python -c "import transformers, huggingface_hub; print('ml gigaam-hf', transformers.__version__, huggingface_hub.__version__)"
+
 FROM ml-base-common AS ml-base-cpu
 
 RUN --mount=type=cache,target=/root/.cache/pip,id=vt-ml-base-pip \

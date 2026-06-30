@@ -30,6 +30,29 @@ def _model_name(config: Dict[str, Any]) -> str:
     return str(config.get("model") or "v3_e2e_rnnt").strip()
 
 
+def _hf_revision(model_name: str) -> str:
+    """Map asr.yaml model id (v3_e2e_rnnt) to HF revision (e2e_rnnt)."""
+    name = model_name.strip()
+    if name.startswith("v3_"):
+        return name[3:]
+    return name
+
+
+def _gigaam_weights_source(model_name: str) -> str:
+    """
+    ``hf`` — Hugging Face (ai-sage/GigaAM-v3, recommended for v3).
+    ``cdn`` — legacy gigaam.load_model() checkpoint CDN.
+    ``auto`` (default) — HF for v3 / short v3 aliases, else CDN.
+    """
+    raw = (os.environ.get("VT_GIGAAM_WEIGHTS_SOURCE") or "auto").strip().lower()
+    if raw in ("hf", "cdn"):
+        return raw
+    short_v3 = {"ctc", "rnnt", "e2e_ctc", "e2e_rnnt", "ssl"}
+    if model_name.startswith("v3_") or model_name in short_v3:
+        return "hf"
+    return "cdn"
+
+
 def _device() -> str:
     dev = (os.environ.get("VT_ASR_DEVICE") or "cpu").strip().lower()
     return dev if dev in ("cpu", "cuda") else "cpu"
@@ -103,8 +126,21 @@ def _prepare_gigaam_cache(config: Dict[str, Any]) -> Path:
     return target
 
 
-def _load_gigaam_model_locked(name: str, *, cache_dir: Path) -> Any:
-    """Cross-process lock: parallel Celery workers must not download the ckpt twice."""
+def _hf_fp16_on_cuda(device: str) -> bool:
+    if device != "cuda":
+        return False
+    raw = (os.environ.get("VT_GIGAAM_FP16_ENCODER") or "").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return False
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    # Match CDN gigaam.load_model(fp16_encoder=True) unless compute type is pure fp32.
+    ct = (os.environ.get("VT_ASR_COMPUTE_TYPE") or "").strip().lower()
+    return ct not in ("float32", "fp32", "32")
+
+
+def _load_gigaam_cdn_model_locked(name: str, *, cache_dir: Path, device: str) -> Any:
+    """Legacy .ckpt download via gigaam package (Sber CDN)."""
     import fcntl
 
     import gigaam  # type: ignore
@@ -112,7 +148,34 @@ def _load_gigaam_model_locked(name: str, *, cache_dir: Path) -> Any:
     lock_path = cache_dir / ".load.lock"
     with open(lock_path, "a+", encoding="utf-8") as lock_file:
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        return gigaam.load_model(name)
+        return gigaam.load_model(name, device=device, download_root=str(cache_dir))
+
+
+def _load_gigaam_hf_model(name: str, config: Dict[str, Any], device: str) -> Any:
+    """Official GigaAM-v3 path: transformers AutoModel from Hugging Face."""
+    _apply_hf_token(config)
+    _apply_cache_env(config)
+    import torch  # type: ignore
+    from transformers import AutoModel  # type: ignore
+
+    revision = _hf_revision(name)
+    repo = (os.environ.get("VT_GIGAAM_HF_REPO") or "ai-sage/GigaAM-v3").strip()
+    token = (os.environ.get("VT_HF_TOKEN") or os.environ.get("HF_TOKEN") or "").strip()
+    # GigaAM hydra modules (FeatureExtractor / MelSpectrogram) break when transformers
+    # builds the skeleton on the meta device (default low_cpu_mem_usage in v5).
+    kwargs: dict[str, Any] = {
+        "revision": revision,
+        "trust_remote_code": True,
+        "low_cpu_mem_usage": False,
+    }
+    if token:
+        kwargs["token"] = token
+    if _hf_fp16_on_cuda(device):
+        kwargs["torch_dtype"] = torch.float16
+    model = AutoModel.from_pretrained(repo, **kwargs)
+    if device == "cuda" and torch.cuda.is_available():
+        model = model.to("cuda")
+    return model.eval()
 
 
 def get_gigaam_model(config: Dict[str, Any]) -> Any:
@@ -135,8 +198,13 @@ def get_gigaam_model(config: Dict[str, Any]) -> Any:
             device = "cpu"
             key = (name, device)
 
+        _apply_hf_token(config)
+        source = _gigaam_weights_source(name)
         try:
-            model = _load_gigaam_model_locked(name, cache_dir=cache_dir)
+            if source == "hf":
+                model = _load_gigaam_hf_model(name, config, device)
+            else:
+                model = _load_gigaam_cdn_model_locked(name, cache_dir=cache_dir, device=device)
         except ImportError as e:
             raise RuntimeError(
                 "gigaam package is not installed (GPU worker: poetry install --with gigaam)"
@@ -212,16 +280,21 @@ def _segments_from_longform(result: Any) -> List[ASRSegment]:
     if result is None:
         return out
     for item in result:
-        text = (getattr(item, "text", None) or "").strip()
+        if isinstance(item, dict):
+            text = str(item.get("transcription") or "").strip()
+            bounds = item.get("boundaries")
+            if isinstance(bounds, (tuple, list)) and len(bounds) >= 2:
+                start = float(bounds[0])
+                end = float(bounds[1])
+            else:
+                start, end = 0.0, 0.0
+        else:
+            text = (getattr(item, "text", None) or "").strip()
+            start = float(getattr(item, "start", 0.0) or 0.0)
+            end = float(getattr(item, "end", 0.0) or 0.0)
         if not text:
             continue
-        out.append(
-            ASRSegment(
-                start=float(getattr(item, "start", 0.0) or 0.0),
-                end=float(getattr(item, "end", 0.0) or 0.0),
-                text=text,
-            )
-        )
+        out.append(ASRSegment(start=start, end=end, text=text))
     return out
 
 

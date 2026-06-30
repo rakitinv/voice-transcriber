@@ -23,11 +23,26 @@ def _model_size(config: Dict[str, Any]) -> str:
     return str(config.get("model") or "base")
 
 
+def _realtime_device() -> str:
+    """Realtime (API/WebSocket) device; separate from batch final ASR on GPU workers."""
+    raw = (os.environ.get("VT_ASR_REALTIME_DEVICE") or os.environ.get("VT_ASR_DEVICE") or "cpu").strip()
+    return raw.lower() or "cpu"
+
+
+def _realtime_compute_type() -> str:
+    raw = (
+        os.environ.get("VT_ASR_REALTIME_COMPUTE_TYPE")
+        or os.environ.get("VT_ASR_COMPUTE_TYPE")
+        or "int8"
+    ).strip()
+    return raw or "int8"
+
+
 def get_whisper_model(config: Dict[str, Any]) -> WhisperModel:
     """Один экземпляр на (model_size, device, compute_type)."""
     size = _model_size(config)
-    device = os.environ.get("VT_ASR_DEVICE", "cpu")
-    compute_type = os.environ.get("VT_ASR_COMPUTE_TYPE", "int8")
+    device = _realtime_device()
+    compute_type = _realtime_compute_type()
     key = (size, device, compute_type)
     with _model_lock:
         if key not in _model_cache:

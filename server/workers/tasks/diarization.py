@@ -23,8 +23,10 @@ from core.logging import logger
 from core.s3 import storage
 from core.webm_pcm import ffmpeg_binary
 from plugins.loader import plugin_registry
+from core.speaker_labels import normalize_diarization_segments, rebuild_transcript_md
+from app.services.speaker_display import reset_speaker_labels_on_diarization_rerun
 from workers.tasks.embeddings import schedule_transcript_embedding
-from workers.tasks.llm import schedule_recording_session_summary
+from workers.tasks.llm import schedule_post_diarization_pipeline
 
 
 def _language_hint_from_transcript_json(tjson: dict | None) -> str | None:
@@ -214,6 +216,8 @@ def run_diarization(
             )
             if conv is None:
                 raise RuntimeError(f"Conversation not found: {conversation_id}")
+
+            reset_speaker_labels_on_diarization_rerun(conv)
 
             # Load input transcript from active version (fallback to latest success).
             base_row = None
@@ -417,18 +421,9 @@ def run_diarization(
                         }
                     )
 
-            # Update transcript with diarization
-            transcript["segments"] = diarized_segments
-
-            # Upload updated transcript
-            md_lines = []
-            for seg in transcript.get("segments") or []:
-                sp = seg.get("speaker", "Speaker 1")
-                md_lines.append(
-                    f"**{sp}** ({float(seg.get('start', 0)):.1f}s–{float(seg.get('end', 0)):.1f}s): "
-                    f"{seg.get('text', '')}"
-                )
-            md = "\n\n".join(md_lines) if md_lines else "_No transcript._\n"
+            # Update transcript with diarization (labels cleared at rerun start)
+            transcript["segments"] = normalize_diarization_segments(diarized_segments, None)
+            md = rebuild_transcript_md(transcript["segments"])
 
             promoted_tid: int | None = None
             with session_scope() as db:
@@ -467,7 +462,7 @@ def run_diarization(
             with session_scope() as db:
                 conv_row = db.query(Conversation).filter(Conversation.id == conv_uuid).first()
                 rsid = str(conv_row.recording_session_id) if conv_row else conversation_id
-            schedule_recording_session_summary(user_id, rsid)
+            schedule_post_diarization_pipeline(user_id, conversation_id, rsid)
 
             logger.info(f"Completed diarization for conversation {conversation_id}")
             t_total1 = time.perf_counter()

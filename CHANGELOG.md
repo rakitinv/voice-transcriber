@@ -15,6 +15,26 @@
 
 ### Removed
 
+## [0.3.1] - 2026-06-30
+
+### Added
+
+- **C1.4 — идентификация и переименование спикеров:** `speaker_labels` и `speaker_identification_status` на `conversations`, ядро `core/speaker_labels.py`, API `GET/PATCH /speakers`, `POST …/identify`, `POST …/apply-suggestions`, Celery `identify_speakers`, интеграция с диаризацией и сводками LLM.
+- Web UI: панель **«Спикеры»** (`SpeakerPanel`) на странице разговора — ручное переименование, приём предложений LLM, автообновление расшифровки после сохранения.
+- Конфиг `speaker_identification` в `configs/llm.yaml`; acceptance-тесты и [`docs/SPEAKER_IDENTIFICATION_ACCEPTANCE.md`](docs/SPEAKER_IDENTIFICATION_ACCEPTANCE.md).
+
+### Changed
+
+- `GET /conversations/{id}` и export: отображаемые имена спикеров из `speaker_labels`, `speaker_id` в сегментах.
+- Панель спикеров: стиль под тёмную тему расшифровки; после переименования акцент на текущем имени, ID диаризации — мелким серым.
+- GigaAM (HF): `low_cpu_mem_usage=False` при загрузке модели (обход meta-device в transformers 5.x).
+- `docker-compose.yml`: `VT_GIGAAM_FP16_ENCODER=0` по умолчанию на GPU final-воркерах (cuFFT / fp16 STFT).
+
+### Fixed
+
+- Web UI: refetch разговора после PATCH спикеров (неверный query key React Query).
+- GigaAM: загрузка весов с Hugging Face (`ai-sage/GigaAM-v3`) и совместимость с deployment_compat.
+
 ## [0.3.0] - 2026-06-25
 
 ### Added
@@ -64,7 +84,8 @@
 - Realtime WebSocket, версионирование транскриптов, admin-webui и admin-api.
 - Документация в `docs/`, release-скрипты в `scripts/release/`.
 
-[Unreleased]: https://github.com/rakitinv/voice-transcriber/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/rakitinv/voice-transcriber/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/rakitinv/voice-transcriber/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/rakitinv/voice-transcriber/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/rakitinv/voice-transcriber/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/rakitinv/voice-transcriber/releases/tag/v0.1.0

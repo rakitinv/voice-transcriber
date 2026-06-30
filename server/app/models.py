@@ -307,6 +307,12 @@ class Conversation(Base):
         post_update=True,
     )
 
+    # C1.4: display names per diarization speaker_id (survives active transcript revision).
+    speaker_labels: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    speaker_identification_status: Mapped[str | None] = mapped_column(
+        String(16), nullable=True
+    )
+
 
 class RecordingSessionSummary(Base):
     """Rolling LLM summary for an autoprolong chain (shared recording_session_id)."""

@@ -21,6 +21,7 @@ from core.config import app_config
 from core.db import get_db
 from core.logging import logger
 from core.s3 import storage
+from core.speaker_labels import apply_speaker_labels, rebuild_transcript_md
 from plugins.loader import plugin_registry
 from workers.celery_app import celery_app
 from workers.tasks.asr import transcribe_file
@@ -71,6 +72,18 @@ class TranscriptSegmentOut(BaseModel):
     start: float
     end: float
     text: str
+    speaker_id: str | None = None
+
+
+class SpeakerLabelEntryOut(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    display_name: str | None = None
+    suggested_name: str | None = None
+    source: str | None = None
+    confidence: float | None = None
+    role: str | None = None
+    evidence: str | None = None
 
 
 class ConversationDetailResponse(ConversationResponse):
@@ -97,6 +110,9 @@ class ConversationDetailResponse(ConversationResponse):
     # §7.6 rolling summary for recording_session_id (null when feature off).
     recording_session_summary_status: str | None = None
     recording_session_summary_updated_at: datetime | None = None
+    speaker_labels: dict[str, SpeakerLabelEntryOut] = Field(default_factory=dict)
+    speaker_identification_status: str | None = None
+    speaker_identification_enabled: bool = False
 
 
 class RecordingSessionSummaryResponse(BaseModel):
@@ -487,17 +503,38 @@ def _list_transcript_duration_language(
     return durations, languages
 
 
-def _segments_from_json(data: dict) -> list[TranscriptSegmentOut]:
+def _segments_from_json(
+    data: dict,
+    speaker_labels: dict | None = None,
+) -> list[TranscriptSegmentOut]:
+    raw = data.get("segments") or []
+    if not isinstance(raw, list):
+        raw = []
+    applied = apply_speaker_labels(
+        [s for s in raw if isinstance(s, dict)],
+        speaker_labels if isinstance(speaker_labels, dict) else None,
+    )
     out: list[TranscriptSegmentOut] = []
-    for seg in data.get("segments") or []:
+    for seg in applied:
         out.append(
             TranscriptSegmentOut(
                 speaker=str(seg.get("speaker", "Speaker 1")),
+                speaker_id=str(seg.get("speaker_id")) if seg.get("speaker_id") else None,
                 start=float(seg.get("start", 0.0)),
                 end=float(seg.get("end", 0.0)),
                 text=str(seg.get("text", "")),
             )
         )
+    return out
+
+
+def _speaker_labels_response(raw: dict | None) -> dict[str, SpeakerLabelEntryOut]:
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, SpeakerLabelEntryOut] = {}
+    for sid, entry in raw.items():
+        if isinstance(entry, dict):
+            out[str(sid)] = SpeakerLabelEntryOut.model_validate(entry)
     return out
 
 
@@ -778,8 +815,12 @@ async def get_conversation(
 
     tjson = (row.transcript_json if row and row.transcript_json else {"segments": []})
     summary = row.summary_md if row else None
-    segments = _segments_from_json(tjson)
+    labels = (
+        conversation.speaker_labels if isinstance(conversation.speaker_labels, dict) else None
+    )
+    segments = _segments_from_json(tjson, labels)
     lang = _display_language_for_viewer(current_user, tjson, segments)
+    si_cfg = app_config.llm.speaker_identification
 
     base = ConversationResponse.model_validate(conversation)
 
@@ -835,6 +876,9 @@ async def get_conversation(
         refetch_recommended=_refetch_recommended(db, conversation, active_row),
         recording_session_summary_status=sess_sum_status,
         recording_session_summary_updated_at=sess_sum_at,
+        speaker_labels=_speaker_labels_response(conversation.speaker_labels),
+        speaker_identification_status=conversation.speaker_identification_status,
+        speaker_identification_enabled=si_cfg.enabled and si_cfg.mode != "off",
     )
 
 
@@ -902,7 +946,10 @@ async def export_conversation(
     )
 
     tjson = (row.transcript_json if row and row.transcript_json else {"segments": []})
-    segments_out = _segments_from_json(tjson)
+    labels = (
+        conversation.speaker_labels if isinstance(conversation.speaker_labels, dict) else None
+    )
+    segments_out = _segments_from_json(tjson, labels)
     dur = _duration_from_segments(segments_out)
     det_lang = _display_language_for_viewer(current_user, tjson, segments_out)
 
@@ -979,8 +1026,16 @@ async def export_conversation(
         # Preserve existing contract (`segments` etc.) and add metadata alongside.
         if isinstance(data, dict):
             data = dict(data)
+            raw_segs = data.get("segments") or []
+            if isinstance(raw_segs, list):
+                data["segments"] = apply_speaker_labels(
+                    [s for s in raw_segs if isinstance(s, dict)],
+                    labels,
+                )
             existing = data.get("_meta")
             merged = dict(meta)
+            if labels:
+                merged["speaker_labels"] = labels
             if isinstance(existing, dict):
                 merged = {**existing, **merged}
             data["_meta"] = merged
@@ -993,18 +1048,17 @@ async def export_conversation(
             },
         )
 
-    # markdown
-    if row.transcript_md:
-        md_body = row.transcript_md
-    else:
-        data = row.transcript_json or {"segments": []}
-        lines = []
-        for seg in data.get("segments") or []:
-            sp = seg.get("speaker", "Speaker 1")
-            lines.append(
-                f"**{sp}** ({seg.get('start', 0):.1f}s–{seg.get('end', 0):.1f}s): {seg.get('text', '')}"
-            )
-        md_body = "\n\n".join(lines) if lines else "_No transcript._\n"
+    # markdown — display names from speaker_labels when set
+    applied_segs = [
+        {
+            "speaker": s.speaker,
+            "start": s.start,
+            "end": s.end,
+            "text": s.text,
+        }
+        for s in segments_out
+    ]
+    md_body = rebuild_transcript_md(applied_segs)
 
     header = (
         f"# Расшифровка\n\n"

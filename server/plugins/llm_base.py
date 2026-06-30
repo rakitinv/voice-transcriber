@@ -12,7 +12,7 @@ Concrete implementations will include:
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any, Dict, Mapping
 
 # Prompt-facing labels for common ISO 639-1 codes (fallback keeps code explicit).
 _SUMMARY_LANG_LABELS: Dict[str, str] = {
@@ -83,6 +83,43 @@ def summary_system_prompt(output_language: str | None) -> str:
     )
 
 
+def build_speaker_identify_prompt(
+    speaker_excerpts: Mapping[str, str],
+    *,
+    output_language: str | None = None,
+) -> str:
+    code = (output_language or "ru").strip().lower()
+    blocks: list[str] = []
+    for sid, excerpt in speaker_excerpts.items():
+        body = (excerpt or "").strip() or "(нет реплик)"
+        blocks.append(f"### {sid}\n{body}")
+    bundle = "\n\n".join(blocks)
+    if code == "ru":
+        return (
+            "По фрагментам расшифровки определи отображаемые имена спикеров.\n"
+            "Правила:\n"
+            "- НЕ выдумывай ФИО: только если имя/роль явно звучит в тексте.\n"
+            "- Если сигналов нет — suggested_name: null или нейтральная роль (Участник 1).\n"
+            "- Ответ — ТОЛЬКО JSON без markdown, формат:\n"
+            '{"speakers":[{"speaker_id":"SPEAKER_00","suggested_name":"Иван",'
+            '"role":"клиент","confidence":0.65,"evidence":"цитата"}],'
+            '"notes":"..."}\n\n'
+            f"Фрагменты:\n\n{bundle}"
+        )
+    label = summary_language_prompt_label(code)
+    return (
+        f"From transcript excerpts, suggest display names for speakers. "
+        f"Write JSON only, in {label} for names/roles when possible.\n"
+        "Do NOT invent full names unless clearly stated in text.\n"
+        "If no signal — suggested_name: null or neutral role.\n"
+        "Schema: "
+        '{"speakers":[{"speaker_id":"SPEAKER_00","suggested_name":"Alex",'
+        '"role":"host","confidence":0.65,"evidence":"quote"}],'
+        '"notes":"..."}\n\n'
+        f"Excerpts:\n\n{bundle}"
+    )
+
+
 class LLMProvider(ABC):
     """Abstract base class for LLM providers."""
 
@@ -122,7 +159,9 @@ class LLMProvider(ABC):
                 "Ниже — хронологические фрагменты транскрипта одной сессии записи "
                 "(возможны несколько conversation ID из-за автопродления). "
                 "Составь краткую Markdown-сводку целиком на русском языке: основные темы, "
-                "решения, задачи и спикеры, если видны. Не переключай язык. "
+                "решения, задачи. Если в тексте есть секция «Участники» — обязательно включи "
+                "отдельный раздел **Участники** с именами из неё; иначе упомяни спикеров только "
+                "если имена явно видны в расшифровке. Не переключай язык. "
                 "Только сводка, без рассуждений.\n\n---\n\n"
                 f"{text}"
             )
@@ -132,7 +171,9 @@ class LLMProvider(ABC):
                 "Below are chronological transcript segments from one recording session "
                 "(possibly split across multiple conversation IDs due to autoprolong). "
                 f"Produce a concise Markdown summary entirely in {lang}: main topics, "
-                "decisions, action items, and notable speakers when evident. "
+                "decisions, action items. If an «Участники» / Participants block is present, "
+                "include a dedicated **Participants** section using those names; otherwise "
+                "mention speakers only when names are evident in the transcript. "
                 "Do not switch languages.\n\n---\n\n"
                 f"{text}"
             )
@@ -144,6 +185,35 @@ class LLMProvider(ABC):
                         "start": 0.0,
                         "end": 0.0,
                         "text": wrapped,
+                    }
+                ]
+            },
+            output_language=output_language,
+        )
+
+    def suggest_speaker_names(
+        self,
+        speaker_excerpts: Mapping[str, str],
+        *,
+        output_language: str | None = None,
+    ) -> str:
+        prompt = build_speaker_identify_prompt(
+            speaker_excerpts, output_language=output_language
+        )
+        return self._complete_for_speaker_identify(prompt, output_language=output_language)
+
+    def _complete_for_speaker_identify(
+        self, prompt: str, *, output_language: str | None = None
+    ) -> str:
+        """Hook for providers; default wraps excerpt as a one-segment summarize call."""
+        return self.summarize(
+            {
+                "segments": [
+                    {
+                        "speaker": "System",
+                        "start": 0.0,
+                        "end": 0.0,
+                        "text": prompt,
                     }
                 ]
             },

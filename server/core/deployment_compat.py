@@ -32,12 +32,30 @@ class QueueConsumerSlice:
 
 
 def deploy_profile() -> str:
-    """Compose / runtime label: ``cpu`` (default stack) or ``gpu``."""
+    """Compose / runtime label: ``cpu`` (default), ``gpu``, or ``gpu-unified``."""
     return (os.environ.get("VT_DEPLOY_PROFILE") or "cpu").strip().lower()
+
+
+def _is_gpu_profile(profile: str) -> bool:
+    return profile in ("gpu", "gpu-unified")
 
 
 def gigaam_importable() -> bool:
     return importlib.util.find_spec("gigaam") is not None
+
+
+def _gigaam_final_delegated_to_worker(
+    *,
+    profile: str,
+    celery_queues: list[QueueConsumerSlice],
+) -> bool:
+    """Final GigaAM runs in ML workers (admin-api need not import gigaam)."""
+    if not _is_gpu_profile(profile):
+        return False
+    for q in celery_queues:
+        if q.queue == "asr_final":
+            return q.consumer_responding
+    return False
 
 
 def _effective_asr_provider_names() -> list[tuple[str, str]]:
@@ -106,6 +124,10 @@ def collect_compatibility_issues(
                     ),
                 )
             )
+        elif tier == "final" and _gigaam_final_delegated_to_worker(
+            profile=profile, celery_queues=queues
+        ):
+            pass
         elif not gigaam_importable():
             issues.append(
                 CompatibilityIssue(
@@ -115,7 +137,10 @@ def collect_compatibility_issues(
                         f"Конфиг ASR ({tier}) использует GigaAM, "
                         "но пакет gigaam не установлен в этом процессе."
                     ),
-                    hint="Соберите образ worker-final-gpu (Dockerfile.ml-base) или poetry install --with gigaam.",
+                    hint=(
+                        "Соберите ML-образ (worker-final-gpu / worker-gpu-unified, Dockerfile.ml-base) "
+                        "или poetry install --with gigaam для API при realtime_provider=gigaam."
+                    ),
                 )
             )
 

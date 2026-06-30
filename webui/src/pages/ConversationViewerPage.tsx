@@ -6,6 +6,7 @@ import {
   useSettingsLimits,
 } from "../hooks/useConversations";
 import { TranscriptViewer } from "../components/TranscriptViewer";
+import { SpeakerPanel } from "../components/SpeakerPanel";
 import { Button } from "../components/Button";
 import { RecordingDownloadIconButton } from "../components/RecordingDownloadIconButton";
 import { conversationsApi } from "../api/conversations";
@@ -117,6 +118,22 @@ export function ConversationViewerPage() {
   const canRetranscribe = !!conversation.audioUploadedAt && !asrBusy;
   const diarizationAllowed = conversation.diarizationEnabled !== false;
   const canDiarizeAgain = !asrBusy && !diarizationBusy && diarizationAllowed;
+  const hasDiarizedTranscript =
+    tier === "final" &&
+    (conversation.transcriptKind === "asr_diarized" ||
+      !!conversation.diarizationPerformedAt);
+  const speakerIdsFromTranscript = Array.from(
+    new Set(
+      (conversation.transcript ?? [])
+        .map((s) => (s as { speaker_id?: string }).speaker_id ?? s.speaker)
+        .filter(Boolean)
+    )
+  );
+
+  const refreshConversation = (): Promise<unknown> => {
+    if (!id) return Promise.resolve();
+    return qc.refetchQueries({ queryKey: CONVERSATION_QUERY_KEY(id, tier) });
+  };
 
   const diarSt = conversation.diarizationStatus ?? null;
   const diarStart = conversation.diarizationStartedAt ?? null;
@@ -430,6 +447,15 @@ export function ConversationViewerPage() {
           длины файла и загрузки сервера). Страница обновится автоматически.
         </div>
       ) : null}
+      <SpeakerPanel
+        conversationId={conversation.id}
+        initialSpeakerIds={speakerIdsFromTranscript}
+        initialLabels={conversation.speakerLabels ?? {}}
+        initialIdentifyStatus={conversation.speakerIdentificationStatus ?? null}
+        identifyEnabled={conversation.speakerIdentificationEnabled === true}
+        hasDiarizedTranscript={hasDiarizedTranscript && hasTranscriptContent}
+        onUpdated={refreshConversation}
+      />
       <TranscriptViewer
         segments={conversation.transcript}
         isProcessing={transcriptProcessing}

@@ -95,7 +95,7 @@
   - [x] **C1.1** Транскрипты: версионирование + `active_transcript_id` (Scheme 2) — хранить историю, отдавать только активную
   - [x] **C1.2** Rerun diarization: endpoint + UI confirm (перезапись = новая версия, promote только на success)
   - [x] **C1.3** Провайдер `pyannote` + отдельный образ воркера: в compose **два** сервиса — `diarization-worker` (CPU wheels, build-arg `DIARIZATION_TORCH=cpu`) и `diarization-worker-gpu` (CUDA wheels, профиль `gpu`, `DIARIZATION_TORCH=cuda`); см. [docker/README.md](../docker/README.md#diarization-cpu-vs-cuda-images)
-- [ ] **C1.4** Идентификация и переименование спикеров (LLM + UI): [SPEAKER_IDENTIFICATION.md](./SPEAKER_IDENTIFICATION.md) — фазы **S1** (ручной rename) → **S2** (LLM suggest) → **S3** (summary/embeddings)
+- [x] **C1.4** Идентификация и переименование спикеров (LLM + UI): [SPEAKER_IDENTIFICATION.md](./SPEAKER_IDENTIFICATION.md) — фазы **S1** (ручной rename) → **S2** (LLM suggest) → **S3** (summary/embeddings)
 - [x] **C2** Semantic search (embeddings), если не сделано в A
 - [x] **C3** Автопродление (ТЗ §7): триггеры, хвост в A, связи в БД
 - [x] **C4** Dual capture (микрофон + вкладка) → микширование в один `audio.webm`
@@ -125,6 +125,15 @@
 - [x] **Очереди `asr_fast` / отдельно от `asr_final`:** `transcribe_slice` → **`asr_fast`**, `transcribe_file` и **`finalize_parallel_transcript`** → **`asr_final`**; compose **`worker`:** `--queues=asr_fast,asr,llm,cleanup`; **`worker-final`:** `asr_final` — см. `workers/celery_app.py`, `docker-compose.yml`
 - [x] **Нарезка/merge длинного upload + final pipeline:** последовательный chunking и параллельный chord + merge в **`workers/tasks/asr.py`** (`VT_ASR_CHUNK_SECONDS`, **`VT_ASR_PARALLEL_CHUNKS`**)
 - [x] **Web UI / расширение (§17.8–§17.9):** Web UI — переключатель Fast/Final и метаданные стадии на **`ConversationViewerPage`**; расширение — канонический **`GET /export`** с **`tier=final`**, кнопки final до **`transcript_status=success`** неактивны; локально «Save live text» для live/fast
+
+### Realtime v2 (расширение + persist fast) — [REALTIME_FAST_FINAL_V2.md](./REALTIME_FAST_FINAL_V2.md)
+
+- [ ] **R1:** дефолт `windowed`; **`finalize`** в расширении; без дублирующего upload после finalize
+- [ ] **R2:** периодический persist **fast** в БД (`fast_persist_interval_s`); Web UI poll черновика во время записи
+- [ ] **R3:** разделение `media_chunk_ms` / `asr_step_ms` в API и расширении
+- [ ] **R4:** overlap окон ASR + merge по таймкодам
+- [ ] **R5:** образ/compose API для CUDA realtime (`nvidia-*`, GPU passthrough)
+- [ ] **R6 (опц.):** fast через Celery `asr_fast` при перегрузке API
 
 ---
 

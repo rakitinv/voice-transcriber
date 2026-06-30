@@ -43,10 +43,31 @@ export interface Conversation {
   /** §7.6 rolling session summary status (null if feature disabled on server) */
   recordingSessionSummaryStatus?: string | null;
   recordingSessionSummaryUpdatedAt?: string | null;
+  /** C1.4 speaker display names */
+  speakerLabels?: Record<string, SpeakerLabelEntry>;
+  speakerIdentificationStatus?: string | null;
+  speakerIdentificationEnabled?: boolean;
+}
+
+export interface SpeakerLabelEntry {
+  display_name?: string | null;
+  suggested_name?: string | null;
+  source?: string | null;
+  confidence?: number | null;
+  role?: string | null;
+  evidence?: string | null;
+}
+
+export interface SpeakersState {
+  speaker_labels: Record<string, SpeakerLabelEntry>;
+  speaker_ids: string[];
+  speaker_identification_status: string | null;
+  speaker_identification_enabled: boolean;
 }
 
 export interface TranscriptSegment {
   speaker: string;
+  speaker_id?: string;
   start: number;
   end: number;
   text: string;
@@ -101,6 +122,8 @@ export interface ServerLimits {
   diarization_turn_level_retranscription_default?: boolean;
   /** ТЗ §7.6 — включена ли генерация rolling-summary по цепочке */
   llm_session_summary_enabled?: boolean;
+  /** C1.4 — LLM identify имён спикеров */
+  speaker_identification_enabled?: boolean;
 }
 
 /** GET /api/settings/oauth-identities (C7.4) */

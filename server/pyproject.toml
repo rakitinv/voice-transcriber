@@ -1,6 +1,6 @@
-[tool.poetry]
+﻿[tool.poetry]
 name = "voice-transcriber-server"
-version = "0.3.0"
+version = "0.3.1"
 description = "Backend server for the voice transcription system"
 authors = ["Your Name <you@example.com>"]
 package-mode = false
@@ -44,7 +44,9 @@ huggingface-hub = "^1.0"
 optional = true
 
 [tool.poetry.group.gigaam.dependencies]
-gigaam = { git = "https://github.com/salute-developers/GigaAM.git", extras = ["longform"] }
+# Do not use extras=[longform]: it pins transformers==5.* (breaks ai-sage/GigaAM-v3 HF load).
+# Longform deps (pyannote, torchcodec) come from group diarization + Dockerfile.ml-base.
+gigaam = { git = "https://github.com/salute-developers/GigaAM.git" }
 torch = "^2.10.0"
 torchaudio = "^2.10.0"
 huggingface-hub = "^1.0"
@@ -63,6 +65,7 @@ pythonpath = ["."]
 markers = [
     "e2e: full-stack integration (VT_E2E_BASE_URL, VT_E2E_TOKEN)",
     "audio_acceptance: audio acceptance harness (VT_E2E_ACCEPTANCE_FILES or fixture paths)",
+    "speaker_acceptance: C1.4 speaker rename/identify (VT_E2E_BASE_URL, VT_E2E_TOKEN or VT_DATABASE_URL)",
     "asr_inference: real ASR on sample-1.webm (ffmpeg + models; skip with VT_SKIP_ASR_INFERENCE=1)",
     "gigaam_inference: real GigaAM ASR (torch + weights; skip with VT_SKIP_ASR_INFERENCE=1)",
 ]

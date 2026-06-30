@@ -54,6 +54,10 @@ class ServerLimitsResponse(BaseModel):
         default=False,
         description="ТЗ §7.6 — rolling LLM summary по цепочке recording_session_id",
     )
+    speaker_identification_enabled: bool = Field(
+        default=False,
+        description="C1.4 — LLM-предложения имён спикеров после диаризации",
+    )
 
 
 class UserSettingsResponse(BaseModel):
@@ -214,6 +218,10 @@ async def get_server_limits() -> ServerLimitsResponse:
         asr_vad_defaults=vad_out,
         diarization_turn_level_retranscription_default=app_config.diarization.turn_level_retranscription,
         llm_session_summary_enabled=app_config.llm.session_summary_enabled,
+        speaker_identification_enabled=(
+            app_config.llm.speaker_identification.enabled
+            and app_config.llm.speaker_identification.mode != "off"
+        ),
     )
 
 

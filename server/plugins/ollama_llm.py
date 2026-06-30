@@ -8,7 +8,13 @@ import httpx
 
 from core.logging import logger
 
-from .llm_base import LLMProvider, strip_llm_thinking_artifacts, summary_language_prompt_label, summary_system_prompt
+from .llm_base import (
+    LLMProvider,
+    build_speaker_identify_prompt,
+    strip_llm_thinking_artifacts,
+    summary_language_prompt_label,
+    summary_system_prompt,
+)
 
 
 def _ollama_http_detail(response: httpx.Response) -> str:
@@ -68,6 +74,16 @@ class OllamaLLMProvider(LLMProvider):
                 f"{bundle}\n\n"
                 "Summary:"
             )
+        return strip_llm_thinking_artifacts(self._generate(prompt))
+
+    def suggest_speaker_names(
+        self,
+        speaker_excerpts,
+        *,
+        output_language: str | None = None,
+    ) -> str:
+        code = (output_language or "ru").strip().lower()
+        prompt = build_speaker_identify_prompt(speaker_excerpts, output_language=code)
         return strip_llm_thinking_artifacts(self._generate(prompt))
 
     def _generate(self, prompt: str) -> str:

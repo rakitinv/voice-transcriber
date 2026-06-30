@@ -5,6 +5,7 @@
 ## Phase C — приёмка C7 + C1 (ручная + автотесты)
 
 Чеклист и порядок ручной проверки: **[PHASE_C_ACCEPTANCE.md](./PHASE_C_ACCEPTANCE.md)**.  
+**C1.4 (спикеры):** автотесты + чеклист — **[SPEAKER_IDENTIFICATION_ACCEPTANCE.md](./SPEAKER_IDENTIFICATION_ACCEPTANCE.md)**.  
 Автотесты без поднятого Docker: `poetry run pytest tests/unit/ -v` (сервер), `npm run test` в `browser-extension/`.
 
 ## A3.2 — интеграционный сценарий Phase A (upload → транскрипт → export)

@@ -26,6 +26,8 @@ async function createConversation(settings: {
   serverUrl: string;
   accessToken: string | null;
   realtimeMode?: string;
+  mediaChunkMs?: number;
+  asrStepMs?: number;
   chunkSizeMs?: number;
   ttlDays?: number;
 }) {
@@ -42,7 +44,8 @@ async function createConversation(settings: {
     title: "Запись из браузера",
     ttl_days: ttl != null && ttl >= 1 ? ttl : null,
     realtime_mode: settings.realtimeMode ?? null,
-    chunk_ms: settings.chunkSizeMs ?? null,
+    media_chunk_ms: settings.mediaChunkMs ?? settings.chunkSizeMs ?? null,
+    asr_step_ms: settings.asrStepMs ?? settings.chunkSizeMs ?? null,
   });
 
   const res = await fetch(url, { method: "POST", headers, body });
@@ -489,7 +492,8 @@ chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) =
         serverUrl: settings.serverUrl,
         accessToken: settings.accessToken,
         realtimeMode: settings.realtimeMode,
-        chunkSizeMs: settings.chunkSizeMs,
+        mediaChunkMs: settings.mediaChunkMs,
+        asrStepMs: settings.asrStepMs,
         ttlDays: settings.ttlDays,
       });
       sendResponse({ ok: true, conversationId });

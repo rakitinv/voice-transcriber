@@ -8,6 +8,8 @@ const baseSettings: ExtensionSettings = {
   refreshToken: null,
   audioSource: "microphone",
   chunkSizeMs: 1000,
+  mediaChunkMs: 1000,
+  asrStepMs: 2500,
   realtimeMode: "chunk",
   ttlDays: 7,
   maxConversationMinutes: 120,

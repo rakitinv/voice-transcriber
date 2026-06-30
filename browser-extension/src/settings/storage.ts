@@ -8,7 +8,12 @@ export interface ExtensionSettings {
   /** Долгоживущий токен сервиса для `POST /api/auth/refresh` (C7.2). */
   refreshToken: string | null;
   audioSource: AudioSource;
-  chunkSizeMs: number; // 500–2000
+  /** @deprecated use mediaChunkMs — kept for stored-settings migration */
+  chunkSizeMs: number;
+  /** MediaRecorder.start(timeslice) — сеть / задержка */
+  mediaChunkMs: number;
+  /** Шаг PCM-буфера на сервере (client_chunk_ms) */
+  asrStepMs: number;
   realtimeMode: RealtimeMode;
   ttlDays: number;
   maxConversationMinutes: number;
@@ -24,10 +29,28 @@ const DEFAULT_SETTINGS: ExtensionSettings = {
   refreshToken: null,
   audioSource: "microphone",
   chunkSizeMs: 1000,
-  realtimeMode: "chunk",
+  mediaChunkMs: 1000,
+  asrStepMs: 2500,
+  realtimeMode: "windowed",
   ttlDays: 7,
   maxConversationMinutes: 120,
 };
+
+function normalizeExtensionSettings(
+  stored: Partial<ExtensionSettings>
+): ExtensionSettings {
+  const merged: ExtensionSettings = { ...DEFAULT_SETTINGS, ...stored };
+  if (
+    stored.mediaChunkMs == null &&
+    stored.asrStepMs == null &&
+    stored.chunkSizeMs != null
+  ) {
+    merged.mediaChunkMs = stored.chunkSizeMs;
+    merged.asrStepMs = stored.chunkSizeMs;
+  }
+  merged.chunkSizeMs = merged.mediaChunkMs;
+  return merged;
+}
 
 const SETTINGS_KEY = "voiceTranscriberSettings";
 
@@ -39,7 +62,7 @@ export async function loadSettings(): Promise<ExtensionSettings> {
       const { languageMode: _lm, languageCode: _lc, ...storedRest } =
         (storedRaw ?? {}) as Record<string, unknown>;
       const stored = storedRest as Partial<ExtensionSettings>;
-      resolve({ ...DEFAULT_SETTINGS, ...stored });
+      resolve(normalizeExtensionSettings(stored));
     });
   });
 }
@@ -54,7 +77,7 @@ export async function updateSettings(
   partial: Partial<ExtensionSettings>
 ): Promise<ExtensionSettings> {
   const current = await loadSettings();
-  const updated: ExtensionSettings = { ...current, ...partial };
+  const updated: ExtensionSettings = normalizeExtensionSettings({ ...current, ...partial });
   await saveSettings(updated);
   return updated;
 }

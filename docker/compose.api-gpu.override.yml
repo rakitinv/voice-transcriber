@@ -1,0 +1,22 @@
+# Override for CUDA realtime ASR on the API container (REALTIME_FAST_FINAL_V2 R5).
+#
+# Usage (from docker/):
+#   docker compose -f docker-compose.yml -f compose.api-gpu.override.yml up -d api
+#
+# Requires: NVIDIA Container Toolkit, VT_ASR_REALTIME_DEVICE=cuda in .env
+# VRAM: whisper (api) + worker-gpu-unified + optional vLLM — monitor with nvidia-smi.
+
+services:
+  api:
+    environment:
+      VT_ASR_REALTIME_DEVICE: ${VT_ASR_REALTIME_DEVICE:-cuda}
+      VT_ASR_DEVICE: ${VT_ASR_REALTIME_DEVICE:-cuda}
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

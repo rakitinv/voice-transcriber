@@ -195,6 +195,19 @@ def collect_compatibility_issues(
                     )
                 )
 
+    if app_config.limits.realtime_fast_via_celery:
+        issues.append(
+            CompatibilityIssue(
+                code="realtime_fast_via_celery_experimental",
+                severity="warning",
+                message=(
+                    "realtime_fast_via_celery включён, но offload fast ASR в Celery asr_fast "
+                    "ещё не реализован (REALTIME_FAST_FINAL_V2 R6)."
+                ),
+                hint="Оставьте realtime_fast_via_celery: false; sync whisper на API остаётся каноном.",
+            )
+        )
+
     return issues
 
 

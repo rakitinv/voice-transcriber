@@ -1,6 +1,6 @@
-﻿{
+{
   "name": "voice-transcriber-browser-extension",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "private": true,
   "scripts": {
     "build": "vite build && node scripts/copy-manifest.mjs",

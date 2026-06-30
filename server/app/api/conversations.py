@@ -38,7 +38,18 @@ class ConversationCreate(BaseModel):
     title: str | None = None
     ttl_days: int | None = None
     realtime_mode: Literal["chunk", "windowed"] | None = None
-    chunk_ms: int | None = None
+    chunk_ms: int | None = Field(
+        default=None,
+        description="Legacy: ASR step and media chunk when asr_step_ms/media_chunk_ms omitted",
+    )
+    asr_step_ms: int | None = Field(
+        default=None,
+        description="PCM buffer step / ASR cadence (stored as client_chunk_ms)",
+    )
+    media_chunk_ms: int | None = Field(
+        default=None,
+        description="Client MediaRecorder timeslice; validated only (not persisted)",
+    )
     previous_conversation_id: UUID | None = Field(
         default=None,
         description="§7 chain: inherits recording_session_id from this conversation",
@@ -152,22 +163,47 @@ class TranscriptVersionsResponse(BaseModel):
     transcripts: list[TranscriptVersionOut] = Field(default_factory=list)
 
 
-def _validate_client_realtime(mode: str | None, chunk_ms: int | None) -> tuple[str | None, int | None]:
+def _clamp_chunk_ms_field(raw: int | None, field_name: str, *, max_ms: int | None = None) -> int | None:
+    if raw is None:
+        return None
     lim = app_config.limits
-    if mode is None and chunk_ms is None:
+    upper = int(max_ms if max_ms is not None else lim.chunk_ms_max)
+    if raw < lim.chunk_ms_min or raw > upper:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"{field_name} must be between {lim.chunk_ms_min} and {upper}",
+        )
+    return int(raw)
+
+
+def _validate_client_realtime(
+    mode: str | None,
+    chunk_ms: int | None,
+    *,
+    asr_step_ms: int | None = None,
+    media_chunk_ms: int | None = None,
+) -> tuple[str | None, int | None]:
+    lim = app_config.limits
+    if mode is None and chunk_ms is None and asr_step_ms is None and media_chunk_ms is None:
         return None, None
     if mode is not None and mode not in lim.allowed_realtime_modes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"realtime_mode must be one of {list(lim.allowed_realtime_modes)}",
         )
-    if chunk_ms is not None:
-        if chunk_ms < lim.chunk_ms_min or chunk_ms > lim.chunk_ms_max:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"chunk_ms must be between {lim.chunk_ms_min} and {lim.chunk_ms_max}",
-            )
-    return mode, chunk_ms
+
+    # media_chunk_ms is client-side; validate when explicitly sent.
+    _clamp_chunk_ms_field(
+        media_chunk_ms,
+        "media_chunk_ms",
+        max_ms=lim.media_chunk_ms_max,
+    )
+
+    resolved_asr = asr_step_ms if asr_step_ms is not None else chunk_ms
+    resolved_asr = _clamp_chunk_ms_field(resolved_asr, "asr_step_ms")
+    if resolved_asr is None and chunk_ms is not None:
+        resolved_asr = _clamp_chunk_ms_field(chunk_ms, "chunk_ms")
+    return mode, resolved_asr
 
 
 @router.post("", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
@@ -177,7 +213,12 @@ async def create_conversation(
     db: Annotated[Session, Depends(get_db)],
 ):
     """Create a new conversation."""
-    mode, chunk_ms = _validate_client_realtime(data.realtime_mode, data.chunk_ms)
+    mode, chunk_ms = _validate_client_realtime(
+        data.realtime_mode,
+        data.chunk_ms,
+        asr_step_ms=data.asr_step_ms,
+        media_chunk_ms=data.media_chunk_ms,
+    )
 
     conversation_id = uuid4()
     s3_prefix = f"users/{current_user.id}/conversations/{conversation_id}"
@@ -410,6 +451,14 @@ def _refetch_recommended(db: Session, conversation: Conversation, row: Transcrip
     )
     if busy_other is not None:
         return True
+
+    fast_row = _fast_transcript_row(db, conversation)
+    if fast_row is not None:
+        fmeta = fast_row.meta if isinstance(fast_row.meta, dict) else {}
+        if fmeta.get("source") == "realtime" and _final_view_transcript_row(
+            db, conversation
+        ) is None:
+            return True
 
     latest_diar = (
         db.query(Transcript)

@@ -128,12 +128,12 @@
 
 ### Realtime v2 (расширение + persist fast) — [REALTIME_FAST_FINAL_V2.md](./REALTIME_FAST_FINAL_V2.md)
 
-- [ ] **R1:** дефолт `windowed`; **`finalize`** в расширении; без дублирующего upload после finalize
-- [ ] **R2:** периодический persist **fast** в БД (`fast_persist_interval_s`); Web UI poll черновика во время записи
-- [ ] **R3:** разделение `media_chunk_ms` / `asr_step_ms` в API и расширении
-- [ ] **R4:** overlap окон ASR + merge по таймкодам
-- [ ] **R5:** образ/compose API для CUDA realtime (`nvidia-*`, GPU passthrough)
-- [ ] **R6 (опц.):** fast через Celery `asr_fast` при перегрузке API
+- [x] **R1:** дефолт `windowed`; **`finalize`** в расширении; без дублирующего upload после finalize
+- [x] **R2:** периодический persist **fast** в БД (`fast_persist_interval_s`); Web UI poll черновика во время записи
+- [x] **R3:** разделение `media_chunk_ms` / `asr_step_ms` в API и расширении
+- [x] **R4:** overlap окон ASR + merge по таймкодам
+- [x] **R5:** образ/compose API для CUDA realtime (`nvidia-*`, GPU passthrough); `compose.api-gpu.override.yml`
+- [x] **R6 (опц.):** конфиг `realtime_fast_via_celery` + предупреждение deploy-compat (offload в Celery — backlog)
 
 ---
 
@@ -182,6 +182,7 @@
 | 2026-06-23 | Зависимости сервера | [DEPENDENCIES_MIGRATION.md](./DEPENDENCIES_MIGRATION.md): **Python 3.12**, pyannote 4 + torch 2.10 + hf_hub 1.x; фазы **4, 5a** (GigaAM в lock, `install-torch.sh`) |
 | 2026-06-24 | Зависимости / деплой | **Unified GPU worker** (`worker-gpu-unified`, profile `gpu-unified`); фазы 0–7 и 5b закрыты |
 | 2026-06-25 | C1.4 / спикеры | План [SPEAKER_IDENTIFICATION.md](./SPEAKER_IDENTIFICATION.md): LLM identify + rename, фазы S1–S3 |
+| 2026-06-30 | Realtime v2 (R1–R6) | [REALTIME_FAST_FINAL_V2.md](./REALTIME_FAST_FINAL_V2.md): windowed + finalize в расширении, persist fast, `media_chunk_ms`/`asr_step_ms`, overlap/merge, `compose.api-gpu.override.yml`; `chunk_ms_max: 3000` в `configs/limits.yaml` |
 
 ---
 

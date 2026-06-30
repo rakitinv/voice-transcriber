@@ -116,6 +116,8 @@ export class TranscriptWebSocketClient {
   }
 }
 
+type FinalizeAckStatus = "accepted" | "duplicate" | "error";
+
 /**
  * Audio WebSocket client for sending chunks to /ws/audio with optional reconnect.
  * Auth: Sec-WebSocket-Protocol `bearer.<JWT>` when token set.
@@ -235,6 +237,55 @@ export class AudioWebSocketClient {
       return;
     }
     this.pendingChunks.push(chunk);
+  }
+
+  sendFinalize(finalizeId: string): void {
+    const payload = JSON.stringify({ type: "finalize", finalize_id: finalizeId });
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(payload);
+    }
+  }
+
+  waitForFinalizeAck(finalizeId: string, timeoutMs: number = 30_000): Promise<FinalizeAckStatus> {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      return Promise.resolve("error");
+    }
+
+    return new Promise((resolve) => {
+      const onMessage = (event: MessageEvent) => {
+        try {
+          const data = JSON.parse(event.data as string) as {
+            type?: string;
+            finalize_id?: string;
+            status?: string;
+          };
+          if (data.type === "finalize_ack" && data.finalize_id === finalizeId) {
+            cleanup();
+            resolve(data.status === "duplicate" ? "duplicate" : "accepted");
+            return;
+          }
+          if (data.type === "finalize_error") {
+            cleanup();
+            resolve("error");
+          }
+        } catch {
+          // ignore malformed messages
+        }
+      };
+
+      const t = setTimeout(() => {
+        cleanup();
+        resolve("error");
+      }, timeoutMs);
+
+      const cleanup = () => {
+        clearTimeout(t);
+        ws.removeEventListener("message", onMessage);
+      };
+
+      ws.addEventListener("message", onMessage);
+    });
   }
 
   close(): void {

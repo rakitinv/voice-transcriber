@@ -93,7 +93,7 @@ export class AudioRecorderController {
     this.mediaRecorder = new MediaRecorder(this.mediaStream, options);
 
     const timeslice = Math.min(
-      Math.max(config.settings.chunkSizeMs, 500),
+      Math.max(config.settings.mediaChunkMs, 500),
       2000
     ); // clamp to 500–2000
 
@@ -173,18 +173,32 @@ export class AudioRecorderController {
     this.monitorAudioContext = null;
 
     if (ws) {
+      let finalizeOk = false;
+      try {
+        const finalizeId = crypto.randomUUID();
+        ws.sendFinalize(finalizeId);
+        const ack = await ws.waitForFinalizeAck(finalizeId);
+        finalizeOk = ack === "accepted" || ack === "duplicate";
+      } catch {
+        finalizeOk = false;
+      }
       ws.close();
+      this.wsClient = null;
+
+      // Fallback: upload only when finalize did not succeed (WS drop, etc.).
+      if (cfg && this.recordedParts.length > 0 && !finalizeOk) {
+        const blob = new Blob(this.recordedParts, { type: this.recordMimeType });
+        await this.uploadRecordingBlob(cfg, blob);
+      }
+    } else {
+      this.wsClient = null;
+      if (cfg && this.recordedParts.length > 0) {
+        const blob = new Blob(this.recordedParts, { type: this.recordMimeType });
+        await this.uploadRecordingBlob(cfg, blob);
+      }
     }
-    this.wsClient = null;
 
     this.state = "idle";
-
-    // Persist a single audio object for the conversation (WebUI download / worker ASR pipeline).
-    if (cfg && this.recordedParts.length > 0) {
-      const blob = new Blob(this.recordedParts, { type: this.recordMimeType });
-      await this.uploadRecordingBlob(cfg, blob);
-    }
-
     this.recordedParts = [];
     this.config = null;
 

@@ -15,6 +15,28 @@
 
 ### Removed
 
+## [0.3.2] - 2026-06-30
+
+### Added
+
+- **Realtime v2 (R1–R6):** [REALTIME_FAST_FINAL_V2.md](docs/REALTIME_FAST_FINAL_V2.md) — дефолт **`windowed`**, **`finalize`** в расширении вместо дублирующего upload, периодический persist **fast** в БД (`fast_persist_interval_s`), разделение **`media_chunk_ms`** / **`asr_step_ms`**, overlap окон ASR и merge partials по таймкодам (`core/realtime_merge.py`), событие WS **`fast_snapshot`**.
+- API: поля `asr_step_ms`, `media_chunk_ms` в `POST /api/conversations`; `media_chunk_ms_max` в limits; опциональные env `VT_LIMITS_CHUNK_MS_MAX`, `VT_LIMITS_MEDIA_CHUNK_MS_MAX`, `VT_FAST_PERSIST_*`, `VT_REALTIME_FAST_VIA_CELERY`.
+- Docker: [`docker/compose.api-gpu.override.yml`](docker/compose.api-gpu.override.yml) для CUDA realtime на `api`; раздел в [`docker/README.md`](docker/README.md).
+- Upload: идемпотентность при повторной загрузке после `finalize`.
+- Unit-тесты: `test_realtime_merge.py`, `test_realtime_fast_persist.py`, `test_conversation_realtime_fields.py`.
+
+### Changed
+
+- Расширение: `finalize` + `finalize_ack` перед закрытием WS; fallback upload только при сбое finalize; дефолты `realtimeMode: windowed`, `asrStepMs: 2500`, `mediaChunkMs: 1000`.
+- Web UI: poll и подсказка «черновик обновляется» на вкладке Fast во время записи.
+- `configs/limits.yaml`: `chunk_ms_max: 3000` (кламп `asr_step_ms`), `window_overlap_ms`, `fast_persist_*`, `default_realtime_mode: windowed`.
+- `transcript_partial` в WS: поля `start` / `end`.
+- [`docs/ROADMAP.md`](docs/ROADMAP.md): R1–R6 отмечены выполненными.
+
+### Fixed
+
+- UTF-8 BOM убран из `pyproject.toml` / `package.json` (ломали Poetry и Vitest на Windows).
+
 ## [0.3.1] - 2026-06-30
 
 ### Added

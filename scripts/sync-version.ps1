@@ -10,6 +10,12 @@ if ($version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$') {
     throw "VERSION must be SemVer (e.g. 0.2.0): got '$version'"
 }
 
+function Write-Utf8NoBom {
+    param([string]$Path, [string]$Content)
+    $utf8 = New-Object System.Text.UTF8Encoding $false
+    [System.IO.File]::WriteAllText($Path, $Content, $utf8)
+}
+
 function Set-PyProjectVersion {
     param([string]$Path)
     if (-not (Test-Path $Path)) { return }
@@ -18,7 +24,7 @@ function Set-PyProjectVersion {
     if ($newText -eq $text) {
         Write-Warning "version= not updated in $Path"
     } else {
-        Set-Content -LiteralPath $Path -Value $newText -Encoding UTF8 -NoNewline
+        Write-Utf8NoBom -Path $Path -Content $newText
         Write-Host "Updated $Path -> $version"
     }
 }
@@ -31,7 +37,7 @@ function Set-PackageJsonVersion {
     if ($newText -eq $text) {
         Write-Warning "version not updated in $Path"
     } else {
-        Set-Content -LiteralPath $Path -Value $newText -Encoding UTF8 -NoNewline
+        Write-Utf8NoBom -Path $Path -Content $newText
         Write-Host "Updated $Path -> $version"
     }
 }

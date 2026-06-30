@@ -319,6 +319,19 @@ Systemd (опционально): `docker/systemd/voice-transcriber-worker-gpu-u
 
 **VRAM:** два split-контейнера на **одной** карте могут конкурировать за память (`nvidia-smi` перед выбором режима). Unified снижает дублирование загрузки моделей в RAM/VRAM, но не убирает пиковую нагрузку при параллельных задачах — настройте `VT_GPU_UNIFIED_CONCURRENCY` / `VT_ASR_FINAL_CONCURRENCY`.
 
+### API realtime на GPU (профиль `api-gpu`, R5)
+
+По умолчанию **`api`** — CPU realtime (`VT_ASR_REALTIME_DEVICE=cpu`). Для CUDA faster-whisper в том же контейнере:
+
+```bash
+cd docker
+docker compose -f docker-compose.yml -f compose.api-gpu.override.yml up -d --build api
+```
+
+В `.env`: `VT_ASR_REALTIME_DEVICE=cuda`, при необходимости `VT_ASR_REALTIME_MODEL=small`. Образ `Dockerfile.api` уже включает pip `nvidia-*` и `LD_LIBRARY_PATH`.
+
+**VRAM на одной карте:** `api` (whisper small/medium) + `worker-gpu-unified` (GigaAM final) + при необходимости vLLM — смотрите `nvidia-smi` до включения realtime CUDA; при нехватке памяти оставьте realtime на CPU или уменьшите модель (`VT_ASR_REALTIME_MODEL`).
+
 **Дублирование образов на диске:** split и unified строятся из **`Dockerfile.ml-base`** (`ml-base-cuda`); слои torch общие. См. [DEPENDENCIES.md](../docs/DEPENDENCIES.md#docker-образы-и-дублирование-слоёв).
 
 ## Diarization: CPU vs CUDA images

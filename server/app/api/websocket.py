@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from typing import Annotated
 from uuid import UUID, uuid4
 
@@ -23,7 +24,11 @@ from core.logging import logger
 from core.security import decode_access_token
 from core.webm_pcm import FfmpegWebmPcmPipe, ffmpeg_binary
 from ..models import Conversation, User
-from .realtime_finalize import MIN_REALTIME_FINALIZE_PCM_BYTES, finalize_realtime_session
+from .realtime_finalize import (
+    MIN_REALTIME_FINALIZE_PCM_BYTES,
+    finalize_realtime_session,
+    persist_fast_snapshot,
+)
 from .ws_auth import extract_access_token_for_websocket
 from .ws_hub import get_transcript_hub
 from .ws_finalize_store import (
@@ -152,9 +157,81 @@ def _build_buffer(conv: Conversation, *, pcm_sample_rate: int | None) -> Realtim
         mode=mode,
         chunk_ms=chunk_ms,
         max_window_ms=lim.max_window_ms,
+        overlap_ms=lim.window_overlap_ms,
         pcm_sample_rate=pcm_sample_rate,
     )
     return RealtimeAudioBuffer(params)
+
+
+def _stream_bytes_per_second(*, use_pcm: bool) -> float:
+    return 32_000.0 if use_pcm else 16_000.0
+
+
+def _piece_time_bounds(
+    *,
+    piece_len: int,
+    stream_end_byte: int,
+    bytes_per_second: float,
+) -> tuple[float, float]:
+    end_b = stream_end_byte
+    start_b = max(0, end_b - piece_len)
+    return start_b / bytes_per_second, end_b / bytes_per_second
+
+
+def _append_partial_entry(partial_entries: list[dict], *, text: str, start: float, end: float) -> None:
+    t = text.strip()
+    if t:
+        partial_entries.append({"start": start, "end": end, "text": t})
+
+
+async def _maybe_persist_fast_snapshot(
+    *,
+    user_id: str,
+    conversation_id: str,
+    partial_entries: list[dict],
+    pcm_len: int,
+    lim,
+    last_persist_at: float,
+    fast_snapshot_seq: int,
+    hub,
+    cid_str: str,
+    step_s: float,
+    overlap_s: float,
+) -> tuple[float, int]:
+    """Persist fast draft when interval and min audio duration are met."""
+    if not partial_entries:
+        return last_persist_at, fast_snapshot_seq
+    pcm_dur = float(pcm_len) / 32000.0 if pcm_len > 0 else 0.0
+    if pcm_dur < float(lim.fast_persist_min_audio_s):
+        return last_persist_at, fast_snapshot_seq
+    now = time.monotonic()
+    if now - last_persist_at < float(lim.fast_persist_interval_s):
+        return last_persist_at, fast_snapshot_seq
+
+    seq = fast_snapshot_seq + 1
+    ok = await asyncio.to_thread(
+        persist_fast_snapshot,
+        user_id=user_id,
+        conversation_id=conversation_id,
+        partial_texts=list(partial_entries),
+        pcm_len=pcm_len,
+        snapshot_seq=seq,
+        step_s=step_s,
+        overlap_s=overlap_s,
+    )
+    if not ok:
+        return last_persist_at, fast_snapshot_seq
+
+    await hub.publish(
+        cid_str,
+        {
+            "type": "fast_snapshot",
+            "conversation_id": cid_str,
+            "fast_snapshot_seq": seq,
+            "processing_tier": "fast",
+        },
+    )
+    return now, seq
 
 
 @router.websocket("/audio/{conversation_id}")
@@ -204,6 +281,10 @@ async def websocket_audio(
         lim.allowed_realtime_modes,
         lim.default_realtime_mode,
     )
+    chunk_ms = clamp_chunk_ms(conv.client_chunk_ms, lim.chunk_ms_min, lim.chunk_ms_max)
+    step_s = chunk_ms / 1000.0
+    overlap_s = float(lim.window_overlap_ms) / 1000.0
+    bps = _stream_bytes_per_second(use_pcm=use_pcm)
 
     decoder: FfmpegWebmPcmPipe | None = FfmpegWebmPcmPipe() if use_pcm else None
 
@@ -226,8 +307,10 @@ async def websocket_audio(
 
     session_pcm = bytearray()
     session_raw = bytearray()
-    partial_texts: list[str] = []
+    partial_entries: list[dict] = []
     handoff_sent = False
+    last_fast_persist_at = 0.0
+    fast_snapshot_seq = 0
 
     try:
         while True:
@@ -270,14 +353,23 @@ async def websocket_audio(
                             {"type": "error", "stage": "asr", "detail": str(e)[:500]}
                         )
                         continue
-                    if text.strip():
-                        partial_texts.append(text.strip())
+                    stream_end = len(session_pcm) if decoder is not None else len(session_raw)
+                    start_s, end_s = _piece_time_bounds(
+                        piece_len=len(piece),
+                        stream_end_byte=stream_end,
+                        bytes_per_second=bps,
+                    )
+                    _append_partial_entry(
+                        partial_entries, text=text, start=start_s, end=end_s
+                    )
                     await hub.publish(
                         cid_str,
                         {
                             "type": "transcript_partial",
                             "conversation_id": cid_str,
                             "text": text,
+                            "start": start_s,
+                            "end": end_s,
                             "realtime_mode": mode,
                             "pcm": use_pcm,
                             "processing_tier": "fast",
@@ -291,6 +383,20 @@ async def websocket_audio(
                             "pcm": use_pcm,
                         }
                     )
+
+                last_fast_persist_at, fast_snapshot_seq = await _maybe_persist_fast_snapshot(
+                    user_id=str(user.id),
+                    conversation_id=cid_str,
+                    partial_entries=partial_entries,
+                    pcm_len=len(session_pcm),
+                    lim=lim,
+                    last_persist_at=last_fast_persist_at,
+                    fast_snapshot_seq=fast_snapshot_seq,
+                    hub=hub,
+                    cid_str=cid_str,
+                    step_s=step_s,
+                    overlap_s=overlap_s,
+                )
 
                 if not handoff_sent and lim.autoprolong_enabled:
                     hit, ap_reason = _autoprolong_limits_hit(
@@ -321,9 +427,11 @@ async def websocket_audio(
                             language=lang_hint,
                             pcm_mono_s16le=bytes(session_pcm),
                             raw_container_bytes=bytes(session_raw),
-                            partial_texts=list(partial_texts),
+                            partial_texts=list(partial_entries),
                             finalize_id=fid,
                             prefer_pcm=use_pcm,
+                            step_s=step_s,
+                            overlap_s=overlap_s,
                         )
                         if not ok_fin:
                             await websocket.send_json(
@@ -421,9 +529,11 @@ async def websocket_audio(
                             language=lang_hint,
                             pcm_mono_s16le=bytes(session_pcm),
                             raw_container_bytes=bytes(session_raw),
-                            partial_texts=list(partial_texts),
+                            partial_texts=list(partial_entries),
                             finalize_id=finalize_id,
                             prefer_pcm=use_pcm,
+                            step_s=step_s,
+                            overlap_s=overlap_s,
                         )
                     )
                     if not ok:
@@ -490,20 +600,27 @@ async def websocket_audio(
                     )
                 except Exception:
                     continue
-                if text.strip():
-                    partial_texts.append(text.strip())
-                    await hub.publish(
-                        cid_str,
-                        {
-                            "type": "transcript_partial",
-                            "conversation_id": cid_str,
-                            "text": text,
-                            "realtime_mode": mode,
-                            "pcm": use_pcm,
-                            "final": True,
-                            "processing_tier": "fast",
-                        },
-                    )
+                stream_end = len(session_pcm) if use_pcm else len(session_raw)
+                start_s, end_s = _piece_time_bounds(
+                    piece_len=len(piece),
+                    stream_end_byte=stream_end,
+                    bytes_per_second=bps,
+                )
+                _append_partial_entry(partial_entries, text=text, start=start_s, end=end_s)
+                await hub.publish(
+                    cid_str,
+                    {
+                        "type": "transcript_partial",
+                        "conversation_id": cid_str,
+                        "text": text,
+                        "start": start_s,
+                        "end": end_s,
+                        "realtime_mode": mode,
+                        "pcm": use_pcm,
+                        "final": True,
+                        "processing_tier": "fast",
+                    },
+                )
         finally:
             # decoder already closed above
             pass

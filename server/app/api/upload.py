@@ -31,10 +31,28 @@ from core.metrics import UPLOAD_ACCEPTED_TOTAL
 from core.s3 import storage
 from core.user_language import default_asr_language_hint_from_preferences
 from workers.celery_app import celery_app
-from ..models import Conversation, User
+from ..models import Conversation, Transcript, User
 from .dependencies import get_current_user
 
 router = APIRouter(prefix="/upload", tags=["upload"])
+
+
+def _final_transcript_already_queued(db, conversation_id: UUID, user_id: UUID) -> bool:
+    rows = (
+        db.query(Transcript)
+        .filter(
+            Transcript.conversation_id == conversation_id,
+            Transcript.user_id == user_id,
+            Transcript.kind == "asr",
+            Transcript.status.in_(("pending", "running", "success")),
+        )
+        .all()
+    )
+    for row in rows:
+        meta = row.meta if isinstance(row.meta, dict) else {}
+        if meta.get("processing_tier") != "fast":
+            return True
+    return False
 
 
 def _default_language_hint(user: User) -> str | None:
@@ -128,6 +146,20 @@ async def upload_audio(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Conversation not found",
             )
+        if (
+            conversation.audio_uploaded_at is not None
+            and _final_transcript_already_queued(db, conversation_id, current_user.id)
+        ):
+            logger.info(
+                "Upload skipped duplicate final for conversation %s (already finalized)",
+                conversation_id,
+            )
+            return {
+                "conversation_id": str(conversation_id),
+                "audio_object_ext": conversation.audio_object_ext or audio_ext,
+                "status": "accepted",
+                "message": "Audio already uploaded; transcription already queued",
+            }
         conversation.audio_object_ext = audio_ext
         conversation.audio_uploaded_at = datetime.now(timezone.utc)
         db.add(conversation)

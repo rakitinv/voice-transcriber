@@ -284,7 +284,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
 
   const pollServerTranscriptAfterStop = useCallback(
     async (s: ExtensionSettings, cid: string, signal: AbortSignal) => {
-      setUploadInfo("Загрузка полной расшифровки с сервера…");
+      setUploadInfo("Ожидание расшифровки с сервера…");
       const ok = await refreshSession(s);
       if (!ok || signal.aborted) {
         if (!signal.aborted) setUploadInfo(null);
@@ -296,7 +296,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
         if (signal.aborted) return;
         try {
           const cur = await loadSettings();
-          const detail = await getConversationDetail(cur, cid);
+          const detail = await getConversationDetail(cur, cid, { tier: "fast" });
           const finalSnap = await getConversationDetail(cur, cid, { tier: "final" });
           if (!signal.aborted) {
             setFinalExportReady(finalSnap.transcript_status === "success");
@@ -781,8 +781,11 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
   const onAudioSourceChange = (e: React.ChangeEvent<HTMLSelectElement>) =>
     void updateLocalSettings({ audioSource: e.target.value as AudioSource });
 
-  const onChunkSizeChange = (e: React.ChangeEvent<HTMLInputElement>) =>
-    void updateLocalSettings({ chunkSizeMs: Number(e.target.value) || 1000 });
+  const onMediaChunkChange = (e: React.ChangeEvent<HTMLInputElement>) =>
+    void updateLocalSettings({ mediaChunkMs: Number(e.target.value) || 1000 });
+
+  const onAsrStepChange = (e: React.ChangeEvent<HTMLInputElement>) =>
+    void updateLocalSettings({ asrStepMs: Number(e.target.value) || 2500 });
 
   const onRealtimeModeChange = (e: React.ChangeEvent<HTMLSelectElement>) =>
     void updateLocalSettings({ realtimeMode: e.target.value as RealtimeMode });
@@ -1312,18 +1315,39 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
                   }}
                 >
                   <label style={{ display: "block", fontSize: 12, minWidth: 0 }}>
-                    Фрагмент (мс)
+                    Медиа-чанк (мс)
                     <input
                       type="number"
                       min={500}
                       max={2000}
                       step={100}
-                      value={settings.chunkSizeMs}
-                      onChange={onChunkSizeChange}
+                      value={settings.mediaChunkMs}
+                      onChange={onMediaChunkChange}
                       style={{ width: "100%", boxSizing: "border-box", marginTop: 4 }}
                     />
                   </label>
 
+                  <label style={{ display: "block", fontSize: 12, minWidth: 0 }}>
+                    Шаг ASR (мс)
+                    <input
+                      type="number"
+                      min={500}
+                      max={3000}
+                      step={100}
+                      value={settings.asrStepMs}
+                      onChange={onAsrStepChange}
+                      style={{ width: "100%", boxSizing: "border-box", marginTop: 4 }}
+                    />
+                  </label>
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: 8,
+                  }}
+                >
                   <label style={{ display: "block", fontSize: 12, minWidth: 0 }}>
                     TTL (дней)
                     <input
@@ -1335,6 +1359,8 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
                       style={{ width: "100%", boxSizing: "border-box", marginTop: 4 }}
                     />
                   </label>
+
+                  <div />
                 </div>
 
                 <label style={{ display: "block", fontSize: 12 }}>
@@ -1344,8 +1370,8 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
                     onChange={onRealtimeModeChange}
                     style={{ width: "100%", boxSizing: "border-box", marginTop: 4 }}
                   >
-                    <option value="chunk">Фрагмент → ASR → частичная расшифровка</option>
-                    <option value="windowed">Окно буфера → ASR → расшифровка</option>
+                    <option value="windowed">Окно буфера (рекомендуется)</option>
+                    <option value="chunk">Фрагмент (устаревший, низкое качество)</option>
                   </select>
                 </label>
 

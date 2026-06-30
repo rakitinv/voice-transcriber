@@ -18,6 +18,7 @@ class RealtimeBufferParams:
     mode: str  # chunk | windowed
     chunk_ms: int
     max_window_ms: int
+    overlap_ms: int = 0
     # Если задан (напр. 16000 после ffmpeg), шаги считаются в PCM s16 mono.
     pcm_sample_rate: int | None = None
     # Если pcm_sample_rate is None — оценка по сырому контейнеру (байт/с).
@@ -42,6 +43,10 @@ class RealtimeAudioBuffer:
             bps = float(params.bytes_per_second)
         self._step_b = max(256, int(params.chunk_ms / 1000.0 * bps))
         self._win_b = max(self._step_b, int(params.max_window_ms / 1000.0 * bps))
+        overlap_b = (
+            max(0, int(params.overlap_ms / 1000.0 * bps)) if params.overlap_ms > 0 else 0
+        )
+        self._advance_b = max(256, self._step_b - overlap_b)
         # Защита от неограниченного роста при отсутствии флаша
         self._cap = self._win_b * 8
 
@@ -57,7 +62,7 @@ class RealtimeAudioBuffer:
             while len(self._buf) >= self._step_b:
                 window = bytes(self._buf[-self._win_b :]) if len(self._buf) > self._win_b else bytes(self._buf)
                 out.append(window)
-                del self._buf[: self._step_b]
+                del self._buf[: self._advance_b]
         else:
             while len(self._buf) >= self._step_b:
                 chunk = bytes(self._buf[: self._step_b])

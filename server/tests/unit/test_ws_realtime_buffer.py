@@ -31,3 +31,20 @@ def test_resolve_mode() -> None:
     assert resolve_realtime_mode("chunk", ("chunk", "windowed"), "windowed") == "chunk"
     assert resolve_realtime_mode(None, ("chunk", "windowed"), "windowed") == "windowed"
     assert resolve_realtime_mode("invalid", ("chunk", "windowed"), "chunk") == "chunk"
+
+
+def test_windowed_overlap_advances_less_than_step() -> None:
+    p = RealtimeBufferParams(
+        mode="windowed",
+        chunk_ms=2000,
+        max_window_ms=4000,
+        overlap_ms=1000,
+        pcm_sample_rate=16_000,
+    )
+    buf = RealtimeAudioBuffer(p)
+    step = buf._step_b
+    advance = buf._advance_b
+    assert advance < step
+    out = buf.feed(b"x" * (step * 3))
+    assert len(out) >= 2
+

@@ -105,6 +105,11 @@ export function ConversationViewerPage() {
   const asrBusy =
     transcriptProcessing || conversation.transcriptStatus === "running";
   const hasTranscriptContent = (conversation.transcript?.length ?? 0) > 0;
+  const fastDraftUpdating =
+    tier === "fast" &&
+    conversation.refetchRecommended &&
+    hasTranscriptContent &&
+    conversation.transcriptStatus === "success";
   /** Нет fast-ветки (upload и т.п.): API отдаёт пустые transcript_* для tier=fast */
   const fastTranscriptAbsent =
     tier === "fast" &&
@@ -461,12 +466,19 @@ export function ConversationViewerPage() {
         isProcessing={transcriptProcessing}
         emptyLabel={
           transcriptProcessing
-            ? "Расшифровка в обработке… Это может занять несколько минут."
+            ? tier === "fast"
+              ? "Черновик формируется… Текст появится через несколько секунд после начала записи."
+              : "Расшифровка в обработке… Это может занять несколько минут."
             : tier === "fast"
               ? "Быстрая ветка для этого разговора недоступна (есть только финальная)."
               : "Расшифровка пока недоступна."
         }
       />
+      {fastDraftUpdating ? (
+        <p className={styles.status} style={{ marginTop: 8 }}>
+          Черновик обновляется по мере записи…
+        </p>
+      ) : null}
     </div>
   );
 }

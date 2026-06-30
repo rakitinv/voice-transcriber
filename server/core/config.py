@@ -90,9 +90,15 @@ class LimitsConfig:
     default_realtime_mode: str
     chunk_ms_min: int
     chunk_ms_max: int
+    media_chunk_ms_max: int
     max_window_ms: int
+    window_overlap_ms: int
     autoprolong_enabled: bool
     autoprolong_tail_seconds: float
+    fast_persist_interval_s: int
+    fast_persist_min_audio_s: float
+    realtime_fast_via_celery: bool = False
+    realtime_fast_offload_min_active_asr: int = 3
 
 
 @dataclass
@@ -243,14 +249,26 @@ def _limits_config_from_yaml(limits_data: Dict[str, Any]) -> LimitsConfig:
         max_ttl_days=int(limits_data.get("max_ttl_days", 30)),
         allowed_realtime_modes=modes,
         default_realtime_mode=str(
-            limits_data.get("default_realtime_mode", "chunk")
+            limits_data.get("default_realtime_mode", "windowed")
         ).lower(),
         chunk_ms_min=int(limits_data.get("chunk_ms_min", 500)),
-        chunk_ms_max=int(limits_data.get("chunk_ms_max", 2000)),
+        chunk_ms_max=int(limits_data.get("chunk_ms_max", 3000)),
+        media_chunk_ms_max=int(limits_data.get("media_chunk_ms_max", 2000)),
         max_window_ms=int(limits_data.get("max_window_ms", 20_000)),
+        window_overlap_ms=int(limits_data.get("window_overlap_ms", 1500)),
         autoprolong_enabled=bool(limits_data.get("autoprolong_enabled", False)),
         autoprolong_tail_seconds=float(
             limits_data.get("autoprolong_tail_seconds", 3.0)
+        ),
+        fast_persist_interval_s=int(
+            limits_data.get("fast_persist_interval_s", 12)
+        ),
+        fast_persist_min_audio_s=float(
+            limits_data.get("fast_persist_min_audio_s", 3.0)
+        ),
+        realtime_fast_via_celery=bool(limits_data.get("realtime_fast_via_celery", False)),
+        realtime_fast_offload_min_active_asr=int(
+            limits_data.get("realtime_fast_offload_min_active_asr", 3)
         ),
     )
 
@@ -643,6 +661,22 @@ def load_app_config() -> ServerConfig:
     )
 
     limits_cfg = _limits_config_from_yaml(limits_data)
+    if os.environ.get("VT_FAST_PERSIST_INTERVAL_SECONDS"):
+        limits_cfg.fast_persist_interval_s = int(
+            os.environ["VT_FAST_PERSIST_INTERVAL_SECONDS"]
+        )
+    if os.environ.get("VT_FAST_PERSIST_MIN_AUDIO_SECONDS"):
+        limits_cfg.fast_persist_min_audio_s = float(
+            os.environ["VT_FAST_PERSIST_MIN_AUDIO_SECONDS"]
+        )
+    if os.environ.get("VT_REALTIME_FAST_VIA_CELERY"):
+        limits_cfg.realtime_fast_via_celery = os.environ[
+            "VT_REALTIME_FAST_VIA_CELERY"
+        ].lower() in ("1", "true", "yes")
+    if os.environ.get("VT_LIMITS_CHUNK_MS_MAX"):
+        limits_cfg.chunk_ms_max = int(os.environ["VT_LIMITS_CHUNK_MS_MAX"])
+    if os.environ.get("VT_LIMITS_MEDIA_CHUNK_MS_MAX"):
+        limits_cfg.media_chunk_ms_max = int(os.environ["VT_LIMITS_MEDIA_CHUNK_MS_MAX"])
 
     asr_providers = {
         name: _asr_provider_config_from_dict(cfg)

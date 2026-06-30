@@ -1,10 +1,10 @@
-﻿[build-system]
+[build-system]
 requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "voice-transcriber-cli"
-version = "0.3.1"
+version = "0.3.2"
 description = "CLI for Voice Transcriber API: upload, conversations, export, audio download"
 readme = "README.md"
 requires-python = ">=3.12,<3.15"

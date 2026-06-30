@@ -1617,7 +1617,17 @@ components:
         chunk_ms:
           type: integer
           nullable: true
-          description: Размер чанка в миллисекундах для realtime (опционально; валидируется по limits)
+          description: >
+            Устаревшее поле: если asr_step_ms и media_chunk_ms не заданы, используется и для ASR step,
+            и как подсказка media chunk на клиенте.
+        asr_step_ms:
+          type: integer
+          nullable: true
+          description: Шаг PCM-буфера / частота ASR (сохраняется в client_chunk_ms)
+        media_chunk_ms:
+          type: integer
+          nullable: true
+          description: Период MediaRecorder на клиенте (только валидация; не хранится на сервере)
         previous_conversation_id:
           type: string
           format: uuid

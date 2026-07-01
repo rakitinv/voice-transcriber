@@ -135,6 +135,45 @@
 - [x] **R5:** образ/compose API для CUDA realtime (`nvidia-*`, GPU passthrough); `compose.api-gpu.override.yml`
 - [x] **R6 (опц.):** конфиг `realtime_fast_via_celery` + предупреждение deploy-compat (offload в Celery — backlog)
 
+### Live UX — качество потока (backlog, **низкий приоритет**)
+
+**Контекст:** live работает (partials по `/ws/transcript`), но в режиме `windowed` с перекрытием окон пользователь видит **повторы и «рваный» текст**; merge по таймкодам применяется при persist **fast** и **finalize**, но **не** в потоке UI. Канон постановки: [REALTIME_FAST_FINAL_V2.md](./REALTIME_FAST_FINAL_V2.md) §1.1, §3 (не-цели), §6.4. **Финальная** расшифровка (GigaAM + диаризация) остаётся продуктовым каноном; этот блок — улучшение черновика/live, не блокер релиза.
+
+**Эпик L1 — расширение: один растущий текст (stable/unstable)**
+
+- [ ] **L1.1** Протащить `start` / `end` из `transcript_partial` в типы и `TranscriptWebSocketClient` (`browser-extension/src/websocket/client.ts`)
+- [ ] **L1.2** Merge partials на клиенте (порт логики `merge_realtime_partials` или эквивалент «хвост + stable») вместо дописывания каждой строки (`App.tsx`)
+- [ ] **L1.3** Режим отображения: один блок текста + опциональная подсветка нестабильного хвоста; сохранить «Save live text» для сырого/merged варианта по выбору
+- [ ] **L1.4** После Stop: подменять live на merged **fast** с сервера (`GET …?tier=fast`), если локальный merge ещё неполный
+
+**Эпик L2 — сервер: события для UI**
+
+- [ ] **L2.1** Публиковать в `/ws/transcript` событие с **уже слитым** текстом (`transcript_merged` или расширить `fast_snapshot`) — не только сырые `transcript_partial`
+- [ ] **L2.2** Частота merged-событий: привязка к `fast_persist_interval_s` или после каждого ASR-окна с антидребезгом
+- [ ] **L2.3** Пресеты в `configs/limits.yaml`: профили latency (`low` / `balanced` / `quality`) — chunk/window, `window_overlap_ms`, `max_window_ms`; документация в [REALTIME_FAST_FINAL_V2.md](./REALTIME_FAST_FINAL_V2.md)
+
+**Эпик L3 — сервер: качество merge окон**
+
+- [ ] **L3.1** Улучшить `merge_realtime_partials`: дедуп по тексту (suffix/prefix overlap), не только `hard_t0` по индексу окна
+- [ ] **L3.2** Отдельный env для realtime: `VT_ASR_CONDITION_ON_PREVIOUS_TEXT` (сейчас общий с batch; может усиливать повторы в скользящих окнах)
+- [ ] **L3.3** Опционально: не публиковать partial, если нормализованный текст ⊆ уже отправленного merged
+
+**Эпик L4 — производительность live (без смены UX)**
+
+- [ ] **L4.1** Документировать и проверить сценарий **`compose.api-gpu.override.yml`** + `VT_ASR_REALTIME_DEVICE=cuda` (снижение задержки, не дублей)
+- [ ] **L4.2** Рекомендуемые env для realtime: `VT_ASR_BEAM_SIZE` ниже для tier realtime (отдельно от final)
+- [ ] **L4.3** Реализация **R6**: offload realtime в Celery `asr_fast` при высокой нагрузке API (экспериментально)
+
+**Эпик L5 — Web UI и документация**
+
+- [ ] **L5.1** Web UI: отображение fast-tier во время/после записи в том же merged-виде, что и расширение
+- [ ] **L5.2** Обновить [BROWSER_EXTENSION_UI.md](./BROWSER_EXTENSION_UI.md) §2.1: stable/unstable, индикатор WS, поведение после Stop
+- [ ] **L5.3** Раздел troubleshooting в [REALTIME_FAST_FINAL_V2.md](./REALTIME_FAST_FINAL_V2.md): повторы в live, `VT_ASR_REALTIME_COMPUTE_TYPE` на CPU vs GPU, краткосрочные настройки без разработки
+
+**Краткосрочные настройки без кода** (операторский справочник, не пункты релиза): режим `chunk` + меньший `asr_step_ms` в расширении; уменьшение `window_overlap_ms` на сервере — компромисс качество/дубли.
+
+**Рекомендуемый порядок при включении в спринт:** L1.1–L1.3 → L2.1 → L3.1 → L5.
+
 ---
 
 ## Параллельно (не блокируют A)
@@ -183,6 +222,7 @@
 | 2026-06-24 | Зависимости / деплой | **Unified GPU worker** (`worker-gpu-unified`, profile `gpu-unified`); фазы 0–7 и 5b закрыты |
 | 2026-06-25 | C1.4 / спикеры | План [SPEAKER_IDENTIFICATION.md](./SPEAKER_IDENTIFICATION.md): LLM identify + rename, фазы S1–S3 |
 | 2026-06-30 | Realtime v2 (R1–R6) | [REALTIME_FAST_FINAL_V2.md](./REALTIME_FAST_FINAL_V2.md): windowed + finalize в расширении, persist fast, `media_chunk_ms`/`asr_step_ms`, overlap/merge, `compose.api-gpu.override.yml`; `chunk_ms_max: 3000` в `configs/limits.yaml` |
+| 2026-07-01 | Live UX (backlog) | Секция **Live UX — качество потока** (L1–L5): merge в UI, merged-события WS, пресеты latency, улучшение `merge_realtime_partials`; **низкий приоритет** — prod-инцидент float16 на CPU закрыт, live работает |
 
 ---
 
@@ -203,3 +243,4 @@
 | 1.10 | 2026-04-23 | Phase B закрыта: B2.0–B2.8 отмечены выполненными; [PHASE_B_ACCEPTANCE.md](./PHASE_B_ACCEPTANCE.md); Vitest в `browser-extension/`; [TESTING.md](./TESTING.md) — раздел Phase B |
 | 1.11 | 2026-04-30 | Phase C: родительские **C7**, **C1** закрыты по реализации; [PHASE_C_ACCEPTANCE.md](./PHASE_C_ACCEPTANCE.md) для ручной приёмки |
 | 1.12 | 2026-05-01 | ТЗ §17: отмечены очереди **`asr_fast`/`asr_final`**, chunking/merge, Web UI + расширение (§17.8–§17.9); синхронизированы **§17.11** ТЗ и [PHASE_B_ACCEPTANCE.md](./PHASE_B_ACCEPTANCE.md); codegen WS — по необходимости |
+| 1.13 | 2026-07-01 | Backlog **Live UX** (L1–L5): повторы в live-потоке, stable/unstable UI, merged WS-события; низкий приоритет |

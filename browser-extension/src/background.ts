@@ -5,7 +5,7 @@ import {
   type RecordingSessionV1,
 } from "./recording/sessionPersist";
 import { loadSettings, type ExtensionSettings } from "./settings/storage";
-import { registerOAuthMessageListener, runOAuthLoginAsync, writeOAuthFlowSnap } from "./auth/oauth";
+import { registerOAuthMessageListener } from "./auth/oauth";
 import { clearSidePanelCloseSuppression } from "./sidePanelPresence";
 
 type Message =
@@ -428,45 +428,15 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 
 registerOAuthMessageListener();
 
-/** Popup closes ⇒ OAuth started there aborts; run OAuth here instead (Chrome MV3). */
-let oauthLoginInFlight = false;
-
 chrome.runtime.onMessage.addListener((message: unknown, _sender, sendResponse) => {
   const m = message as Record<string, unknown>;
 
   if (m?.type === "vt_oauth_login") {
-    const provider = m.provider === "yandex" ? "yandex" : "google";
-    if (oauthLoginInFlight) {
-      sendResponse({ ok: false, error: "Sign-in already in progress." });
-      return false;
-    }
-    oauthLoginInFlight = true;
-    void writeOAuthFlowSnap({ pending: true, lastError: null })
-      .then(async () => {
-        try {
-          const settings = await loadSettings();
-          const result = await runOAuthLoginAsync(settings.serverUrl, provider);
-          await writeOAuthFlowSnap({
-            pending: false,
-            lastError: result.ok ? null : result.error,
-          });
-        } catch (e) {
-          await writeOAuthFlowSnap({
-            pending: false,
-            lastError: e instanceof Error ? e.message : String(e),
-          });
-        } finally {
-          oauthLoginInFlight = false;
-        }
-      })
-      .catch(async (e) => {
-        oauthLoginInFlight = false;
-        await writeOAuthFlowSnap({
-          pending: false,
-          lastError: e instanceof Error ? e.message : String(e),
-        });
-      });
-    sendResponse({ ok: true });
+    // OAuth must run in popup/sidepanel (user gesture for chrome.identity.launchWebAuthFlow).
+    sendResponse({
+      ok: false,
+      error: "Откройте всплывающее окно расширения и войдите через кнопки в Настройках.",
+    });
     return false;
   }
 

@@ -184,6 +184,112 @@ def _append_partial_entry(partial_entries: list[dict], *, text: str, start: floa
         partial_entries.append({"start": start, "end": end, "text": t})
 
 
+async def _transcribe_and_publish_pieces(
+    *,
+    pieces: list[bytes],
+    partial_entries: list[dict],
+    hub,
+    cid_str: str,
+    mode: str,
+    use_pcm: bool,
+    session_pcm: bytearray,
+    session_raw: bytearray,
+    bps: float,
+    lang_hint: str | None,
+    vad_prefs: dict | None,
+    decoder: FfmpegWebmPcmPipe | None,
+    final: bool = False,
+) -> None:
+    for piece in pieces:
+        if not piece:
+            continue
+        try:
+            text = (
+                await _transcribe_pcm_chunk(piece, lang_hint, vad_prefs)
+                if decoder is not None
+                else await _transcribe_container_chunk(piece, lang_hint, vad_prefs)
+            )
+        except Exception as e:
+            logger.exception("transcribe_chunk failed: %s", e)
+            continue
+        stream_end = len(session_pcm) if decoder is not None else len(session_raw)
+        start_s, end_s = _piece_time_bounds(
+            piece_len=len(piece),
+            stream_end_byte=stream_end,
+            bytes_per_second=bps,
+        )
+        _append_partial_entry(partial_entries, text=text, start=start_s, end=end_s)
+        if not text.strip():
+            continue
+        await hub.publish(
+            cid_str,
+            {
+                "type": "transcript_partial",
+                "conversation_id": cid_str,
+                "text": text,
+                "start": start_s,
+                "end": end_s,
+                "realtime_mode": mode,
+                "pcm": use_pcm,
+                "final": final,
+                "processing_tier": "fast",
+            },
+        )
+
+
+async def _flush_tail_asr(
+    *,
+    decoder: FfmpegWebmPcmPipe | None,
+    audio_buf: RealtimeAudioBuffer,
+    session_pcm: bytearray,
+    session_raw: bytearray,
+    use_pcm: bool,
+    mode: str,
+    partial_entries: list[dict],
+    hub,
+    cid_str: str,
+    lang_hint: str | None,
+    vad_prefs: dict | None,
+    bps: float,
+    close_decoder: bool,
+    final: bool,
+) -> None:
+    """Decode/ffmpeg flush + windowed tail — must run before finalize saves partial_entries."""
+    pieces: list[bytes] = []
+    if decoder is not None:
+        if close_decoder:
+            try:
+                await asyncio.to_thread(decoder.close)
+            except Exception:
+                pass
+        try:
+            pcm = await asyncio.to_thread(decoder.drain_pcm)
+        except Exception:
+            pcm = b""
+        if pcm:
+            session_pcm.extend(pcm)
+            pieces = audio_buf.feed(pcm)
+    if not pieces and mode == "windowed":
+        tail = getattr(audio_buf, "_buf", None)  # type: ignore[attr-defined]
+        if isinstance(tail, (bytearray, bytes)) and len(tail) > 0:
+            pieces = [bytes(tail)]
+    await _transcribe_and_publish_pieces(
+        pieces=pieces,
+        partial_entries=partial_entries,
+        hub=hub,
+        cid_str=cid_str,
+        mode=mode,
+        use_pcm=use_pcm,
+        session_pcm=session_pcm,
+        session_raw=session_raw,
+        bps=bps,
+        lang_hint=lang_hint,
+        vad_prefs=vad_prefs,
+        decoder=decoder,
+        final=final,
+    )
+
+
 async def _maybe_persist_fast_snapshot(
     *,
     user_id: str,
@@ -311,6 +417,7 @@ async def websocket_audio(
     handoff_sent = False
     last_fast_persist_at = 0.0
     fast_snapshot_seq = 0
+    decoder_tail_flushed = False
 
     try:
         while True:
@@ -522,6 +629,25 @@ async def websocket_audio(
                             }
                         )
                         continue
+                    if not decoder_tail_flushed:
+                        await _flush_tail_asr(
+                            decoder=decoder,
+                            audio_buf=audio_buf,
+                            session_pcm=session_pcm,
+                            session_raw=session_raw,
+                            use_pcm=use_pcm,
+                            mode=mode,
+                            partial_entries=partial_entries,
+                            hub=hub,
+                            cid_str=cid_str,
+                            lang_hint=lang_hint,
+                            vad_prefs=vad_prefs,
+                            bps=bps,
+                            close_decoder=True,
+                            final=True,
+                        )
+                        decoder_tail_flushed = True
+                        decoder = None
                     ok, err = await asyncio.to_thread(
                         lambda: finalize_realtime_session(
                             user_id=str(user.id),
@@ -561,69 +687,26 @@ async def websocket_audio(
     except Exception as e:
         logger.exception("WS audio error: %s", e)
     finally:
-        # Best-effort: flush remaining decoder/buffer so short recordings still produce at least one partial.
-        try:
-            if decoder is not None:
-                # Important: close stdin and wait for ffmpeg to flush remaining PCM,
-                # then drain any bytes produced by the reader thread.
-                try:
-                    await asyncio.to_thread(decoder.close)
-                except Exception:
-                    pass
-                try:
-                    pcm = await asyncio.to_thread(decoder.drain_pcm)
-                except Exception:
-                    pcm = b""
-                if pcm:
-                    session_pcm.extend(pcm)
-                    pieces = audio_buf.feed(pcm)
-                else:
-                    pieces = []
-            else:
-                pieces = []
-
-            # If windowed mode never reached step threshold, force a final pass with whatever is buffered.
-            # This avoids "no realtime text" on short clips when chunk_ms is large.
-            if not pieces and mode == "windowed":
-                tail = getattr(audio_buf, "_buf", None)  # type: ignore[attr-defined]
-                if isinstance(tail, (bytearray, bytes)) and len(tail) > 0:
-                    pieces = [bytes(tail)]
-
-            for piece in pieces:
-                if not piece:
-                    continue
-                try:
-                    text = await (
-                        _transcribe_pcm_chunk(piece, lang_hint, vad_prefs)
-                        if use_pcm
-                        else _transcribe_container_chunk(piece, lang_hint, vad_prefs)
-                    )
-                except Exception:
-                    continue
-                stream_end = len(session_pcm) if use_pcm else len(session_raw)
-                start_s, end_s = _piece_time_bounds(
-                    piece_len=len(piece),
-                    stream_end_byte=stream_end,
-                    bytes_per_second=bps,
+        if not decoder_tail_flushed:
+            try:
+                await _flush_tail_asr(
+                    decoder=decoder,
+                    audio_buf=audio_buf,
+                    session_pcm=session_pcm,
+                    session_raw=session_raw,
+                    use_pcm=use_pcm,
+                    mode=mode,
+                    partial_entries=partial_entries,
+                    hub=hub,
+                    cid_str=cid_str,
+                    lang_hint=lang_hint,
+                    vad_prefs=vad_prefs,
+                    bps=bps,
+                    close_decoder=True,
+                    final=True,
                 )
-                _append_partial_entry(partial_entries, text=text, start=start_s, end=end_s)
-                await hub.publish(
-                    cid_str,
-                    {
-                        "type": "transcript_partial",
-                        "conversation_id": cid_str,
-                        "text": text,
-                        "start": start_s,
-                        "end": end_s,
-                        "realtime_mode": mode,
-                        "pcm": use_pcm,
-                        "final": True,
-                        "processing_tier": "fast",
-                    },
-                )
-        finally:
-            # decoder already closed above
-            pass
+            except Exception as e:
+                logger.exception("WS audio tail flush failed: %s", e)
 
 
 @router.websocket("/transcript/{conversation_id}")

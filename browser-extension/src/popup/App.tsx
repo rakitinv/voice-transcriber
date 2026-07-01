@@ -10,13 +10,14 @@ import {
 import { getConversationDetail, fetchConversationExport, getSessionSummary, retrySessionSummary, pollSessionSummary, type RecordingSessionSummaryDto } from "../api/conversation";
 import { getUserSettings, getServerLimits, type UserSettings, type ServerLimits } from "../api/settings";
 import { postUploadAudio } from "../api/upload";
-import { readRecordingSession } from "../recording/sessionPersist";
+import { readRecordingSession, type RecordingSessionV1 } from "../recording/sessionPersist";
 import { RECORDING_ACTIVE_KEY, RECORDING_SESSION_KEY } from "../recording/storageKeys";
 import {
   clearExtensionAuth,
   verifyOrRefreshSession,
   readOAuthFlowSnap,
   writeOAuthFlowSnap,
+  runOAuthLoginAsync,
   OAUTH_FLOW_STORAGE_KEY,
   type OAuthFlowSnap,
 } from "../auth/oauth";
@@ -49,6 +50,16 @@ export interface AppProps {
 interface TranscriptLine {
   id: string;
   text: string;
+}
+
+const REALTIME_FAST_EMPTY_PLACEHOLDER = "[realtime fast — нет текста частичных распознаваний]";
+
+function isRealtimeFastEmptyPlaceholder(text: string): boolean {
+  return text.trim() === REALTIME_FAST_EMPTY_PLACEHOLDER;
+}
+
+function waitNextFrame(): Promise<void> {
+  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
 }
 
 type SidePanelWithClose = typeof chrome.sidePanel & {
@@ -104,8 +115,11 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
   const handleStartRef = React.useRef<() => Promise<void>>(async () => {});
   /** Cancels post-stop transcript polling when a new recording starts. */
   const transcriptPollAbortRef = React.useRef<AbortController | null>(null);
-  /** After Stop, ignore late transcript_partial (buffer flush) so server poll is not overwritten. */
+  /** After server poll replaces transcript, ignore late transcript_partial from hub. */
   const ignoreLiveTranscriptRef = React.useRef(false);
+  const transcriptTextRef = React.useRef("");
+  /** Blocks storage session sync while handleStart is creating a new recording. */
+  const startingRecordingRef = React.useRef(false);
 
   useEffect(() => {
     void loadSettings().then(setSettings);
@@ -203,17 +217,57 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
 
   settingsRef.current = settings;
   conversationIdRef.current = conversationId;
+  const uiModeRef = React.useRef(uiMode);
+  uiModeRef.current = uiMode;
 
-  useEffect(() => {
-    void readRecordingSession().then((s) => {
-      const off = !!(s?.active && s.surface === "offscreen");
-      setOffscreenMicActive(off);
-      if (uiMode !== "recording" || !off || !s) return;
+  const applyRecordingSessionSync = useCallback((session: RecordingSessionV1 | null) => {
+    if (startingRecordingRef.current) return;
+
+    const off = !!(session?.active && session.surface === "offscreen");
+    setOffscreenMicActive(off);
+    if (uiModeRef.current !== "recording") return;
+
+    const popupRecorderLive = recorderRef.current?.getState() === "recording";
+
+    if (!session?.active) {
+      if (recordingSurfaceRef.current === "offscreen") {
+        recordingSurfaceRef.current = null;
+        setStatus("idle");
+      } else if (!popupRecorderLive) {
+        setStatus("idle");
+      }
+      return;
+    }
+
+    // Tab/dual capture in this document wins over a stale offscreen session in storage.
+    if (popupRecorderLive) {
+      if (session.surface !== "popup" || session.conversationId !== conversationIdRef.current) {
+        return;
+      }
+      recordingSurfaceRef.current = "popup";
+      setStatus("recording");
+      ignoreLiveTranscriptRef.current = false;
+      return;
+    }
+
+    setConversationId(session.conversationId);
+    ignoreLiveTranscriptRef.current = false;
+
+    if (session.surface === "offscreen") {
       recordingSurfaceRef.current = "offscreen";
       setStatus("recording");
-      setConversationId(s.conversationId);
-    });
-  }, [uiMode]);
+      return;
+    }
+
+    if (session.surface === "popup") {
+      recordingSurfaceRef.current = "popup";
+      setStatus("recording");
+    }
+  }, []);
+
+  useEffect(() => {
+    void readRecordingSession().then(applyRecordingSessionSync);
+  }, [uiMode, applyRecordingSessionSync]);
 
   useEffect(() => {
     const onStorage = (
@@ -224,18 +278,11 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
       const sess = changes[RECORDING_SESSION_KEY];
       const leg = changes[RECORDING_ACTIVE_KEY];
       if (!sess && !leg) return;
-      void readRecordingSession().then((s) => {
-        setOffscreenMicActive(!!(s?.active && s.surface === "offscreen"));
-        const nextActive = !!s?.active;
-        if (!nextActive && recordingSurfaceRef.current === "offscreen") {
-          recordingSurfaceRef.current = null;
-          setStatus("idle");
-        }
-      });
+      void readRecordingSession().then(applyRecordingSessionSync);
     };
     chrome.storage.onChanged.addListener(onStorage);
     return () => chrome.storage.onChanged.removeListener(onStorage);
-  }, []);
+  }, [applyRecordingSessionSync]);
 
   useEffect(() => {
     const onPageHide = () => {
@@ -259,7 +306,12 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
     if (r.status === "unauthorized") {
       setSessionOk(false);
       setSettings(await loadSettings());
-      setError("Сессия истекла или токен недействителен — войдите снова.");
+      const hasToken = !!(_s.accessToken ?? "").trim() || !!(_s.refreshToken ?? "").trim();
+      setError(
+        hasToken
+          ? "Сессия истекла или токен недействителен — войдите снова."
+          : null
+      );
       return false;
     }
     /* network: /auth/me timeout, 5xx, or fetch failure — tokens usually unchanged */
@@ -307,11 +359,16 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
             setConversationSummaryStatus(finalSnap.recording_session_summary_status ?? null);
           }
           const segs = detail.transcript ?? [];
-          if (segs.length > 0) {
+          const realSegs = segs.filter((x) => !isRealtimeFastEmptyPlaceholder(x.text));
+          if (realSegs.length > 0) {
             if (signal.aborted) return;
-            setTranscriptLines(segs.map((x) => ({ id: crypto.randomUUID(), text: x.text })));
+            ignoreLiveTranscriptRef.current = true;
+            setTranscriptLines(realSegs.map((x) => ({ id: crypto.randomUUID(), text: x.text })));
             setUploadInfo(null);
             return;
+          }
+          if (segs.length > 0 && realSegs.length === 0 && attempt >= 4) {
+            break;
           }
           if (detail.refetch_recommended === false && attempt >= 2) {
             break;
@@ -342,7 +399,13 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
         }
       }
       if (!signal.aborted) {
-        setUploadInfo("Полная расшифровка ещё не готова — нажмите «Обновить с сервера».");
+        if (!transcriptTextRef.current.trim()) {
+          setUploadInfo(
+            "Частичная расшифровка не получена (звук вкладки или короткая запись). Нажмите «Обновить с сервера» для полной версии."
+          );
+        } else {
+          setUploadInfo(null);
+        }
       }
     },
     [refreshSession]
@@ -382,7 +445,10 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
       const snap = ch.newValue as OAuthFlowSnap;
       if (!snap.pending) {
         setOauthBusy(false);
-        setError(snap.lastError ?? null);
+        if (snap.lastError) {
+          setError(snap.lastError);
+          return;
+        }
         void loadSettings().then((latest) => refreshSession(latest));
       } else {
         setOauthBusy(true);
@@ -448,11 +514,44 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
   }, [uiMode, sessionOk, settings?.serverUrl, settings?.accessToken, settings]);
 
   const sessionSummaryFeatureOn = serverLimits?.llm_session_summary_enabled === true;
+  const transcriptWsServerUrl = settings?.serverUrl;
+  const transcriptWsToken = settings?.accessToken ?? null;
+  const recordingUiActive = status === "recording" || offscreenMicActive;
+
+  useLayoutEffect(() => {
+    // Subscribe before audio sends chunks (layout effect after conversationId is committed).
+    // Late partials after server poll are ignored via ignoreLiveTranscriptRef (see pollServerTranscriptAfterStop).
+    if (!transcriptWsServerUrl || !conversationId) return;
+    const client = new TranscriptWebSocketClient(
+      transcriptWsServerUrl,
+      conversationId,
+      transcriptWsToken
+    );
+    wsRef.current = client;
+    const onMsg = (msg: TranscriptMessage) => {
+      if (ignoreLiveTranscriptRef.current) return;
+      if (msg.type === "transcript") {
+        const t = msg.text.trim();
+        if (!t) return;
+        setTranscriptLines((prev) => [...prev, { id: crypto.randomUUID(), text: t }]);
+      } else if (msg.type === "error") {
+        setError(msg.message);
+      }
+    };
+    client.addListener(onMsg);
+    client.connect();
+    return () => {
+      client.removeListener(onMsg);
+      client.close();
+      wsRef.current = null;
+    };
+  }, [transcriptWsServerUrl, transcriptWsToken, conversationId, transcriptWsBootKey]);
 
   useEffect(() => {
+    if (status === "recording") return;
     setRollingSummary(null);
     setConversationSummaryStatus(null);
-  }, [conversationId]);
+  }, [conversationId, status]);
 
   useEffect(() => {
     if (!conversationId || !sessionSummaryFeatureOn || conversationSummaryStatus !== "success") return;
@@ -513,48 +612,18 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
     return () => chrome.storage.onChanged.removeListener(onStorageChanged);
   }, []);
 
-  useLayoutEffect(() => {
-    // Subscribe before audio sends chunks (layout effect after conversationId is committed).
-    // Late partials after Stop are ignored via ignoreLiveTranscriptRef (see handleStop / handleStart).
-    if (!settings || !conversationId) return;
-    const client = new TranscriptWebSocketClient(
-      settings.serverUrl,
-      conversationId,
-      settings.accessToken
-    );
-    wsRef.current = client;
-    const onMsg = (msg: TranscriptMessage) => {
-      if (ignoreLiveTranscriptRef.current) return;
-      if (msg.type === "transcript") {
-        // Append each partial as its own line: chunk/windowed ASR slices are independent; merging
-        // into one string can drop text on bad suffix/prefix overlap. Final server transcript replaces all.
-        const t = msg.text.trim();
-        if (!t) return;
-        setTranscriptLines((prev) => [...prev, { id: crypto.randomUUID(), text: t }]);
-      } else if (msg.type === "error") {
-        setError(msg.message);
-      }
-    };
-    client.addListener(onMsg);
-    client.connect();
-    return () => {
-      client.removeListener(onMsg);
-      client.close();
-      wsRef.current = null;
-    };
-  }, [settings, conversationId, transcriptWsBootKey]);
-
   const transcriptText = useMemo(
     () => transcriptLines.map((l) => l.text).join("\n"),
     [transcriptLines]
   );
+  transcriptTextRef.current = transcriptText;
   const hasLiveTranscriptText = transcriptText.trim().length > 0;
   const canGetSessionSummary =
     !!conversationId && sessionSummaryFeatureOn && sessionOk === true && !summaryLoading;
 
   const handleStart = async () => {
     if (!settings) return;
-    if (status === "recording") return;
+    if (status === "recording" || offscreenMicActive) return;
     transcriptPollAbortRef.current?.abort();
     transcriptPollAbortRef.current = null;
     ignoreLiveTranscriptRef.current = false;
@@ -566,23 +635,33 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
     const ok = await refreshSession(settings);
     if (!ok) return;
 
-    chrome.runtime.sendMessage({ type: "create_conversation_for_recording" }, async (response) => {
-      if (chrome.runtime.lastError) {
-        setError(chrome.runtime.lastError.message ?? "Не удалось начать запись");
-        return;
-      }
-      if (!response?.ok) {
-        setError(response?.error ?? "Не удалось начать запись");
-        return;
-      }
-      const newConversationId = response.conversationId as string | undefined;
-      if (!newConversationId) {
-        setError("Сервер не вернул идентификатор разговора");
-        return;
-      }
+    startingRecordingRef.current = true;
+    await new Promise<void>((resolve) => {
+      chrome.runtime.sendMessage({ type: "bg_clear_recording_session" }, () => {
+        void chrome.runtime.lastError;
+        resolve();
+      });
+    });
 
+    chrome.runtime.sendMessage({ type: "create_conversation_for_recording" }, async (response) => {
       try {
+        if (chrome.runtime.lastError) {
+          setError(chrome.runtime.lastError.message ?? "Не удалось начать запись");
+          return;
+        }
+        if (!response?.ok) {
+          setError(response?.error ?? "Не удалось начать запись");
+          return;
+        }
+        const newConversationId = response.conversationId as string | undefined;
+        if (!newConversationId) {
+          setError("Сервер не вернул идентификатор разговора");
+          return;
+        }
+
         setConversationId(newConversationId);
+        await waitNextFrame();
+
         if (settings.audioSource === "microphone") {
           const win = await chrome.windows.getCurrent();
           if (win.id == null) throw new Error("Не удалось определить окно браузера для сессии записи");
@@ -613,9 +692,6 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
           await recorderRef.current.start({
             settings,
             conversationId: newConversationId,
-            onBeforeStop: () => {
-              ignoreLiveTranscriptRef.current = true;
-            },
             onAfterStop: () => {
               recordingSurfaceRef.current = null;
               setStatus("idle");
@@ -668,6 +744,8 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
         setConversationId(null);
         recordingSurfaceRef.current = null;
         setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        startingRecordingRef.current = false;
       }
     });
   };
@@ -690,13 +768,21 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
   }, [uiMode]);
 
   const handleStop = async () => {
-    ignoreLiveTranscriptRef.current = true;
-    const cid = conversationId;
-    const s = settings;
-    const surfaceBeforeStop = recordingSurfaceRef.current;
+    const cid = conversationId ?? conversationIdRef.current;
+    const s = settings ?? settingsRef.current;
+    const popupRecorderLive = recorderRef.current?.getState() === "recording";
+    let surfaceBeforeStop = recordingSurfaceRef.current;
+    if (!surfaceBeforeStop) {
+      const snap = await readRecordingSession();
+      if (snap?.active) surfaceBeforeStop = snap.surface;
+    }
+    if (popupRecorderLive) surfaceBeforeStop = "popup";
     let stopOk = true;
     try {
-      if (recordingSurfaceRef.current === "offscreen") {
+      if (popupRecorderLive) {
+        await recorderRef.current!.stop();
+        recordingSurfaceRef.current = null;
+      } else if (surfaceBeforeStop === "offscreen" || offscreenMicActive) {
         await new Promise<void>((resolve, reject) => {
           chrome.runtime.sendMessage({ type: "bg_stop_offscreen_recording" }, (resp) => {
             if (chrome.runtime.lastError) {
@@ -720,7 +806,7 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
       setError(e instanceof Error ? e.message : String(e));
     }
     setStatus("idle");
-    // Tab/popup: `recorder.stop` → `onAfterStop` already polls. Offscreen mic has no onAfterStop here.
+    setOffscreenMicActive(false);
     if (stopOk && uiMode === "recording" && s && cid && surfaceBeforeStop === "offscreen") {
       startPostStopTranscriptPoll(s, cid);
     }
@@ -901,19 +987,33 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
     setError(null);
     setUploadInfo(null);
     setOauthBusy(true);
-    chrome.runtime.sendMessage({ type: "vt_oauth_login", provider }, (resp) => {
-      const lastErr = chrome.runtime.lastError;
-      if (lastErr) {
+    void (async () => {
+      try {
+        await writeOAuthFlowSnap({ pending: true, lastError: null });
+        const serverUrl = (settings.serverUrl ?? "").trim();
+        if (!serverUrl) {
+          throw new Error("Укажите URL сервера в настройках расширения.");
+        }
+        const result = await runOAuthLoginAsync(serverUrl, provider);
+        await writeOAuthFlowSnap({
+          pending: false,
+          lastError: result.ok ? null : result.error,
+        });
+        if (!result.ok) {
+          setError(result.error ?? "Не удалось войти.");
+          setOauthBusy(false);
+          return;
+        }
+        const latest = await loadSettings();
+        await refreshSession(latest);
         setOauthBusy(false);
-        setError(lastErr.message);
-        return;
-      }
-      const r = resp as { ok?: boolean; error?: string } | undefined;
-      if (r?.ok === false) {
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        await writeOAuthFlowSnap({ pending: false, lastError: msg });
+        setError(msg);
         setOauthBusy(false);
-        setError(r.error ?? "Не удалось начать вход.");
       }
-    });
+    })();
   };
 
   if (!settings) {
@@ -1098,14 +1198,14 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
         <div style={{ display: "flex", gap: 8 }}>
           <button
             onClick={handleStart}
-            disabled={status === "recording" || oauthBusy}
+            disabled={recordingUiActive || oauthBusy}
             style={{ flex: 1, minWidth: 0 }}
           >
             Начать запись
           </button>
           <button
             onClick={handleStop}
-            disabled={status !== "recording"}
+            disabled={!recordingUiActive}
             style={{ flex: 1, minWidth: 0 }}
           >
             Остановить запись
@@ -1113,8 +1213,8 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
         </div>
         <div style={{ marginTop: 4, fontSize: 12, lineHeight: 1.2 }}>
           Статус:{" "}
-          <strong style={{ color: status === "recording" ? "green" : "gray" }}>
-            {status === "recording" ? "идёт запись" : "остановлено"}
+          <strong style={{ color: recordingUiActive ? "green" : "gray" }}>
+            {recordingUiActive ? "идёт запись" : "остановлено"}
           </strong>
         </div>
         {settings.audioSource === "microphone" ? (

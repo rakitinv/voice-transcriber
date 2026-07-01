@@ -39,9 +39,15 @@ RUN --mount=type=cache,target=/root/.cache/pip,id=vt-api-pip \
     pip install --upgrade pip setuptools wheel
 
 RUN --mount=type=cache,target=/root/.cache/pip,id=vt-api-pip \
-    pip install poetry poetry-plugin-export
+    pip install "poetry==2.3.2" poetry-plugin-export
 
 RUN poetry config virtualenvs.create false
+
+# Poetry upgrades site-packages via pip; a partial attrs uninstall breaks pip (rich → attr.setters.pipe).
+RUN --mount=type=cache,target=/root/.cache/pip,id=vt-api-pip \
+    python -c "import re, subprocess; \
+m=re.search(r'name = \"attrs\"\nversion = \"([^\"]+)\"', open('poetry.lock', encoding='utf-8').read()); \
+subprocess.check_call(['pip', 'install', '--force-reinstall', f'attrs=={m.group(1)}']) if m else None"
 
 # -----------------------------------------------------------------------------
 # Development / CI image: main + dev (pytest, ruff, …). Не использовать как prod API.
@@ -49,6 +55,7 @@ RUN poetry config virtualenvs.create false
 FROM base AS dev
 RUN --mount=type=cache,target=/root/.cache/pip,id=vt-api-pip \
     --mount=type=cache,target=/root/.cache/pypoetry,id=vt-api-pypoetry \
+    POETRY_INSTALLER_MAX_WORKERS=1 \
     poetry install --with dev --no-interaction --no-ansi --no-root
 WORKDIR /app/server
 # Переопределение: docker compose run --rm tests python -m pytest tests/unit/test_admin_sprint4.py -q
@@ -60,6 +67,7 @@ CMD ["python", "-m", "pytest", "tests/unit", "-q", "--tb=short"]
 FROM base AS runtime
 RUN --mount=type=cache,target=/root/.cache/pip,id=vt-api-pip \
     --mount=type=cache,target=/root/.cache/pypoetry,id=vt-api-pypoetry \
+    POETRY_INSTALLER_MAX_WORKERS=1 \
     poetry install --only main --no-interaction --no-ansi --no-root
 # faster-whisper (ctranslate2) on CUDA needs pip NVIDIA libs + LD_LIBRARY_PATH (see ml-base-cuda).
 RUN --mount=type=cache,target=/root/.cache/pip,id=vt-api-pip \

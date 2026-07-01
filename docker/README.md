@@ -237,6 +237,14 @@ powershell -File scripts/release/build-docker.ps1 -Services webui admin-webui
 
 В `Dockerfile.api` / `Dockerfile.worker` используется **`poetry.lock`** (без `rm -f poetry.lock`) и увеличенные таймауты pip/poetry.
 
+### Ошибка `attr.setters has no attribute 'pipe'` / `Cannot install httpx` при `poetry install`
+
+При сборке **ml-base** / **api** / **worker** Poetry обновляет пакеты в system site-packages через pip. Если **`attrs`** оказывается в «полуснятом» состоянии, ломается сам pip (`rich` → `attr.setters.pipe`), и установка падает на `httpx` или другом пакете.
+
+1. Повторите сборку — в Dockerfile перед `poetry install` уже выполняется `pip install --force-reinstall attrs==…` из `poetry.lock`.
+2. Если ошибка повторяется: `docker builder prune -f`, затем `docker compose build --no-cache worker-gpu-unified` (или упавший сервис).
+3. Очистка кэша BuildKit pip/poetry: `docker buildx prune -f`.
+
 ## Final ASR: CPU vs GPU (`worker-final` / `worker-final-gpu`)
 
 | Сервис | Профиль | Очереди Celery | Устройство ASR |

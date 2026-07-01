@@ -447,6 +447,8 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
     };
   }, [uiMode, sessionOk, settings?.serverUrl, settings?.accessToken, settings]);
 
+  const sessionSummaryFeatureOn = serverLimits?.llm_session_summary_enabled === true;
+
   useEffect(() => {
     setRollingSummary(null);
     setConversationSummaryStatus(null);
@@ -547,7 +549,6 @@ export const App: React.FC<AppProps> = ({ layout = "popup", variant: variantProp
     [transcriptLines]
   );
   const hasLiveTranscriptText = transcriptText.trim().length > 0;
-  const sessionSummaryFeatureOn = serverLimits?.llm_session_summary_enabled === true;
   const canGetSessionSummary =
     !!conversationId && sessionSummaryFeatureOn && sessionOk === true && !summaryLoading;
 

@@ -37,12 +37,20 @@ RUN --mount=type=cache,target=/root/.cache/pip,id=vt-worker-pip \
 
 # 1. Устанавливаем poetry и плагин
 RUN --mount=type=cache,target=/root/.cache/pip,id=vt-worker-pip \
-    pip install poetry poetry-plugin-export
+    pip install "poetry==2.3.2" poetry-plugin-export
 
 # 2. Ставим зависимости в system site-packages без lock/export.
 RUN poetry config virtualenvs.create false
+
+# Poetry upgrades site-packages via pip; a partial attrs uninstall breaks pip (rich → attr.setters.pipe).
+RUN --mount=type=cache,target=/root/.cache/pip,id=vt-worker-pip \
+    python -c "import re, subprocess; \
+m=re.search(r'name = \"attrs\"\nversion = \"([^\"]+)\"', open('poetry.lock', encoding='utf-8').read()); \
+subprocess.check_call(['pip', 'install', '--force-reinstall', f'attrs=={m.group(1)}']) if m else None"
+
 RUN --mount=type=cache,target=/root/.cache/pip,id=vt-worker-pip \
     --mount=type=cache,target=/root/.cache/pypoetry,id=vt-worker-pypoetry \
+    POETRY_INSTALLER_MAX_WORKERS=1 \
     poetry install --only main --no-interaction --no-ansi --no-root
 
 # Устанавливаем только сам poetry
